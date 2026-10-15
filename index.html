@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DEADZONE</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Oswald:wght@300;400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- LOADING -->
+  <div id="loading" class="screen show">
+    <div class="load-inner">
+      <div class="logo small">DEAD<span>ZONE</span></div>
+      <div class="load-bar"><div id="load-fill"></div></div>
+      <div id="load-text">INITIALIZING…</div>
+    </div>
+  </div>
+
+  <!-- MAIN MENU -->
+  <div id="menu" class="screen">
+    <div class="menu-left">
+      <div class="logo">DEAD<span>ZONE</span></div>
+      <div class="subtitle">SITE 9 // HOLLOW CREEK QUARANTINE</div>
+      <div class="menu-buttons">
+        <button class="mbtn" data-action="play">DEPLOY</button>
+        <button class="mbtn" data-action="settings">SETTINGS</button>
+        <button class="mbtn" data-action="controls">FIELD MANUAL</button>
+      </div>
+      <div id="menu-best" class="menu-best"></div>
+    </div>
+    <div class="menu-footer">CLICK DEPLOY TO BEGIN · HEADPHONES RECOMMENDED</div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="settings" class="screen panel-screen">
+    <div class="panel">
+      <h2>SETTINGS</h2>
+      <div class="setting"><label>Mouse Sensitivity</label><input type="range" id="set-sens" min="0.2" max="3" step="0.05" /><span class="val" id="val-sens"></span></div>
+      <div class="setting"><label>ADS Sensitivity</label><input type="range" id="set-adssens" min="0.2" max="1.5" step="0.05" /><span class="val" id="val-adssens"></span></div>
+      <div class="setting"><label>Field of View</label><input type="range" id="set-fov" min="60" max="110" step="1" /><span class="val" id="val-fov"></span></div>
+      <div class="setting"><label>Master Volume</label><input type="range" id="set-vol" min="0" max="1" step="0.01" /><span class="val" id="val-vol"></span></div>
+      <div class="setting"><label>Music Volume</label><input type="range" id="set-music" min="0" max="1" step="0.01" /><span class="val" id="val-music"></span></div>
+      <div class="setting"><label>Graphics Quality</label>
+        <select id="set-quality"><option value="low">LOW</option><option value="medium">MEDIUM</option><option value="high">HIGH</option><option value="ultra">ULTRA</option></select><span class="val"></span></div>
+      <div class="setting"><label>Invert Y</label><input type="checkbox" id="set-invert" /><span class="val"></span></div>
+      <div class="setting"><label>Film Grain</label><input type="checkbox" id="set-grain" /><span class="val"></span></div>
+      <div class="setting"><label>Announcer Voice</label><input type="checkbox" id="set-voice" /><span class="val"></span></div>
+      <div class="note">Graphics quality changes apply instantly (shadows, resolution, effects).</div>
+      <button class="mbtn back" data-action="back">BACK</button>
+    </div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div id="controls" class="screen panel-screen">
+    <div class="panel">
+      <h2>FIELD MANUAL</h2>
+      <div class="controls-grid">
+        <div><kbd>W A S D</kbd> Move</div><div><kbd>MOUSE</kbd> Look</div>
+        <div><kbd>LMB</kbd> Fire</div><div><kbd>RMB</kbd> Aim down sights</div>
+        <div><kbd>SHIFT</kbd> Sprint</div><div><kbd>CTRL / C</kbd> Crouch · Slide</div>
+        <div><kbd>SPACE</kbd> Jump</div><div><kbd>R</kbd> Reload</div>
+        <div><kbd>F</kbd> Interact / Buy (hold to rebuild)</div><div><kbd>V / E</kbd> Melee</div>
+        <div><kbd>G</kbd> Frag grenade</div><div><kbd>1 2 3 / WHEEL</kbd> Switch weapon</div>
+        <div><kbd>ESC</kbd> Pause</div><div><kbd>TAB</kbd> Intel</div>
+      </div>
+      <div class="manual">
+        <p><b>SURVIVE.</b> The dead come in waves. Each round they grow stronger and faster.</p>
+        <p><b>EARN.</b> Hits, kills and headshots earn points. Rebuild barricades for more.</p>
+        <p><b>SPEND.</b> Open sealed doors, buy chalk weapons off walls, gamble at the <b>Reliquary Box</b>.</p>
+        <p><b>POWER.</b> Restore the generator to activate <b>Perk Machines</b> and <b>The Forge</b>, which upgrades your weapons.</p>
+        <p><b>RED FOG.</b> Every fifth round the fog turns red. Something hunts within it.</p>
+      </div>
+      <button class="mbtn back" data-action="back">BACK</button>
+    </div>
+  </div>
+
+  <!-- PAUSE -->
+  <div id="pause" class="screen panel-screen">
+    <div class="panel small">
+      <h2>PAUSED</h2>
+      <button class="mbtn" data-action="resume">RESUME</button>
+      <button class="mbtn" data-action="settings">SETTINGS</button>
+      <button class="mbtn" data-action="controls">FIELD MANUAL</button>
+      <button class="mbtn" data-action="quit">END GAME</button>
+    </div>
+  </div>
+
+  <!-- GAME OVER -->
+  <div id="gameover" class="screen">
+    <div class="go-inner">
+      <div class="go-title">YOU HAVE FALLEN</div>
+      <div class="go-rounds" id="go-rounds"></div>
+      <div class="go-stats" id="go-stats"></div>
+      <div class="go-buttons">
+        <button class="mbtn" data-action="play">REDEPLOY</button>
+        <button class="mbtn" data-action="menu">MAIN MENU</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div id="damage-overlay"></div>
+    <div id="damage-dirs"></div>
+    <div id="flash-overlay"></div>
+    <div id="scope-overlay"><div class="scope-ring"></div></div>
+    <div id="crosshair">
+      <div class="ch t"></div><div class="ch b"></div><div class="ch l"></div><div class="ch r"></div><div class="dot"></div>
+    </div>
+    <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+    <div id="banner"><div class="b-title"></div><div class="b-sub"></div></div>
+    <div id="prompt"><span id="prompt-text"></span><div id="prompt-hold"><div></div></div></div>
+    <div id="round-wrap"><canvas id="round-canvas" width="360" height="200"></canvas></div>
+    <div id="perks"></div>
+    <div id="powerups"></div>
+    <div id="points-wrap">
+      <div id="points-pop"></div>
+      <div id="points">500</div>
+    </div>
+    <div id="weapon-wrap">
+      <div id="weapon-name">P-9 WARDEN</div>
+      <div id="ammo"><span id="ammo-mag">8</span><span id="ammo-sep">/</span><span id="ammo-res">80</span></div>
+      <div id="grenades"></div>
+      <div id="reload-hint">RELOAD</div>
+    </div>
+    <div id="zone-name"></div>
+    <div id="killfeed"></div>
+    <div id="intel">
+      <div class="intel-row"><span>ROUND</span><b id="in-round">1</b></div>
+      <div class="intel-row"><span>KILLS</span><b id="in-kills">0</b></div>
+      <div class="intel-row"><span>HEADSHOTS</span><b id="in-hs">0</b></div>
+      <div class="intel-row"><span>REMAINING</span><b id="in-rem">0</b></div>
+      <div class="intel-row"><span>POWER</span><b id="in-power">OFFLINE</b></div>
+      <div class="intel-row"><span>TIME</span><b id="in-time">0:00</b></div>
+    </div>
+    <div id="downed"><div>DOWN</div><small id="downed-sub">SECOND WIND ENGAGING…</small></div>
+    <div id="click-to-play">CLICK TO RESUME</div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
