@@ -108,6 +108,7 @@ export class AudioEngine {
     const src = ctx.createBufferSource();
     src.buffer = brown ? this.brownBuf : this.noiseBuf;
     src.playbackRate.value = rate;
+    src.loop = true;
     const f = ctx.createBiquadFilter(); f.type = type; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
     if (freqEnd) f.frequency.exponentialRampToValueAtTime(Math.max(20, freqEnd), t + dur + hold);
     const g = ctx.createGain();
