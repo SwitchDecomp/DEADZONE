@@ -4,6 +4,45 @@ import { rand, clamp, angleDiff, lerp, damp, chance, smoothstep } from '../core/
 
 const _d = { x: 0, z: 0, d: 0 };
 const UP = new THREE.Vector3(0, 1, 0);
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
+
+function boneWorld(b, out, lx = 0, ly = 0, lz = 0) { return out.set(lx, ly, lz).applyMatrix4(b.matrixWorld); }
+function raySphere(o, d, c, r) {
+  const ox = o.x - c.x, oy = o.y - c.y, oz = o.z - c.z;
+  const b = ox * d.x + oy * d.y + oz * d.z;
+  const cc = ox * ox + oy * oy + oz * oz - r * r;
+  const h = b * b - cc;
+  if (h < 0) return -1;
+  const s = Math.sqrt(h);
+  let t = -b - s;
+  if (t < 0) t = -b + s;
+  return t >= 0 ? t : -1;
+}
+function rayCapsule(o, d, pa, pb, r) {
+  const bax = pb.x - pa.x, bay = pb.y - pa.y, baz = pb.z - pa.z;
+  const oax = o.x - pa.x, oay = o.y - pa.y, oaz = o.z - pa.z;
+  const baba = bax * bax + bay * bay + baz * baz;
+  const bard = bax * d.x + bay * d.y + baz * d.z;
+  const baoa = bax * oax + bay * oay + baz * oaz;
+  const rdoa = d.x * oax + d.y * oay + d.z * oaz;
+  const oaoa = oax * oax + oay * oay + oaz * oaz;
+  const a = baba - bard * bard;
+  let best = -1;
+  if (a > 1e-10) {
+    const b = baba * rdoa - baoa * bard;
+    const c = baba * oaoa - baoa * baoa - r * r * baba;
+    const h = b * b - a * c;
+    if (h >= 0) {
+      const t = (-b - Math.sqrt(h)) / a;
+      const y = baoa + t * bard;
+      if (t >= 0 && y > 0 && y < baba) best = t;
+    }
+  }
+  const t1 = raySphere(o, d, pa, r), t2 = raySphere(o, d, pb, r);
+  if (t1 >= 0 && (best < 0 || t1 < best)) best = t1;
+  if (t2 >= 0 && (best < 0 || t2 < best)) best = t2;
+  return best;
+}
 
 export class Zombie {
   constructor(mgr, type, hp, speed) {
@@ -11,8 +50,9 @@ export class Zombie {
     this.game = mgr.game;
     this.type = type;
     const m = buildZombie(this.game.textures, type);
-    this.root = m.root; this.p = m.parts; this.meshes = m.meshes; this.helmet = m.helmet; this.headMesh = m.headMesh; this.scale = m.scale;
-    for (const mesh of this.meshes) mesh.userData.zombie = this;
+    this.root = m.root; this.mesh = m.mesh; this.p = m.parts; this.helmet = m.helmet; this.scale = m.scale; this.model = m;
+    this.mesh.castShadow = this.game.quality !== 'low' && this.game.quality !== 'medium' ? true : type === 'brute' || Math.random() < 0.5;
+    this.bulk = type === 'brute' ? 1.35 : 1;
     this.hp = hp; this.maxHp = hp;
     this.speed = speed;
     this.run = speed > 2.2;
@@ -21,9 +61,10 @@ export class Zombie {
     this.phase = Math.random() * 10;
     this.seed = Math.random() * 100;
     this.limp = Math.random() < 0.35 ? rand(0.3, 0.8) : 0;
-    this.armsOut = !this.run && Math.random() < 0.65;
+    this.armsOut = !this.run && Math.random() < 0.6;
+    this.oneArm = Math.random() < 0.3;
     this.tilt = rand(-0.25, 0.25);
-    this.hunch = rand(0.05, 0.35);
+    this.hunch = rand(0.08, 0.38);
     this.vel = new THREE.Vector3();
     this.dir = new THREE.Vector3(0, 0, 1);
     this.yaw = 0;
@@ -34,16 +75,19 @@ export class Zombie {
     this.radius = type === 'brute' ? 0.55 : 0.32;
     this.crawler = false;
     this.headless = false;
+    this.lost = { L: false, R: false };
     this.helmetHp = type === 'brute' ? hp * 0.25 : hp * 0.6;
     this.window = null;
     this.stuckT = 0; this.lastPos = new THREE.Vector3();
     this.charge = 0; this.chargeCd = rand(3, 6);
-    this.footT = 0;
+    this.footT = Math.random();
     this.fallDir = -1;
     this.impulse = new THREE.Vector3();
     this.hipsBaseY = 0.95;
     this.shockT = 0;
     this.tearAnim = 0;
+    this.react = 0; this.reactPart = null; this.reactSgn = 1; this.reactSide = 0;
+    this.stumble = 0;
     this.game.scene.add(this.root);
   }
 
@@ -72,7 +116,32 @@ export class Zombie {
     this.root.rotation.y = this.yaw;
   }
 
-  damage(amount, part, point, dir, src = {}) {
+  // analytic hit test against bone-driven capsules. returns {t, part, sub} | null
+  hitTest(o, d, maxT) {
+    if (!this.alive) return null;
+    const s = this.scale, P = this.p;
+    _c.copy(this.pos); _c.y += (this.crawler ? 0.35 : 0.95) * s;
+    const bt = raySphere(o, d, _c, 1.35 * s);
+    if (bt < 0 || bt > maxT + 1.4 * s) return null;
+    let best = maxT, part = null, sub = null;
+    const test = (t, name, sb) => { if (t >= 0 && t < best) { best = t; part = name; sub = sb; } };
+    if (!this.headless) { boneWorld(P.head, _a, 0, 0.095, 0.012); test(raySphere(o, d, _a, 0.112 * s * (this.type === 'brute' ? 1.1 : 1)), 'head', 'head'); }
+    boneWorld(P.hips, _a, 0, -0.06, 0); boneWorld(P.neck, _b, 0, -0.04, 0);
+    test(rayCapsule(o, d, _a, _b, 0.165 * s * this.bulk), 'torso', 'torso');
+    for (const sd of ['L', 'R']) {
+      boneWorld(P['sh' + sd], _a); boneWorld(P['el' + sd], _b);
+      test(rayCapsule(o, d, _a, _b, 0.058 * s * this.bulk), 'limb', 'arm' + sd);
+      if (!this.lost[sd]) { boneWorld(P['hand' + sd], _a, 0, -0.1, 0); test(rayCapsule(o, d, _b, _a, 0.048 * s * this.bulk), 'limb', 'arm' + sd); }
+      boneWorld(P['hip' + sd], _a); boneWorld(P['knee' + sd], _b);
+      test(rayCapsule(o, d, _a, _b, 0.085 * s * this.bulk), 'limb', 'leg' + sd);
+      if (!this.crawler) { boneWorld(P['ankle' + sd], _a); test(rayCapsule(o, d, _b, _a, 0.062 * s * this.bulk), 'limb', 'leg' + sd); }
+    }
+    return part ? { t: best, part, sub } : null;
+  }
+
+  hideBone(b) { b.scale.setScalar(0.0001); }
+
+  damage(amount, part, point, dir, src = {}, sub = null) {
     if (!this.alive) return { killed: false };
     const g = this.game;
     const head = part === 'head';
@@ -82,8 +151,8 @@ export class Zombie {
       amount *= 0.35;
       if (this.helmetHp <= 0) {
         const hp = new THREE.Vector3(); this.helmet.getWorldPosition(hp);
-        g.effects.gib(this.helmet, hp, new THREE.Vector3(dir.x * 3, 4, dir.z * 3), this.scale * 1.08);
-        this.helmet.visible = false; this.helmet.userData.part = null;
+        g.effects.gib(this.helmet, hp, new THREE.Vector3(dir.x * 3, 4, dir.z * 3), this.scale);
+        this.helmet.visible = false;
         this.helmet = null;
       }
       g.audio.ricochet(point.clone());
@@ -91,10 +160,17 @@ export class Zombie {
     if (g.powerups.active.instakill > 0) amount = this.type === 'brute' ? amount * 3 : this.hp + 1;
     this.hp -= amount;
     this.shockT = 0.12;
+    // hit reaction
+    const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
+    this.reactSgn = dir.x * fx + dir.z * fz < 0 ? 1 : -1;
+    this.reactSide = (dir.x * fz - dir.z * fx) > 0 ? 1 : -1;
+    this.react = Math.min(1, 0.35 + amount / this.maxHp) * (this.type === 'brute' ? 0.35 : 1);
+    this.reactPart = sub || part;
+    if (sub && sub.startsWith('leg') && this.type !== 'brute') this.stumble = Math.max(this.stumble, Math.min(0.9, 0.3 + amount / this.maxHp));
     if (this.state === 'chase' || this.state === 'attack') {
       this.impulse.addScaledVector(dir, Math.min(1.5, (amount / this.maxHp) * 4) * (this.type === 'brute' ? 0.2 : 1));
     }
-    if (part === 'limb' && amount > 160 && chance(0.25) && this.hp > 0) this.loseArm(dir);
+    if (part === 'limb' && sub && sub.startsWith('arm') && amount > 160 && chance(0.3) && this.hp > 0) this.loseArm(dir, sub.slice(3));
     if (this.hp <= 0) {
       this.die(dir, head, src);
       return { killed: true, head };
@@ -103,24 +179,28 @@ export class Zombie {
     return { killed: false, head };
   }
 
-  loseArm(dir) {
-    const side = Math.random() < 0.5 ? this.p.elL : this.p.elR;
-    if (!side.visible) return;
-    const wp = new THREE.Vector3(); side.getWorldPosition(wp);
-    this.game.effects.gib(side, wp, new THREE.Vector3(dir.x * 3 + rand(-1, 1), 3, dir.z * 3 + rand(-1, 1)), this.scale);
-    side.visible = false;
-    side.children.forEach((c) => { c.userData.part = null; });
+  loseArm(dir, side) {
+    if (!side) side = this.lost.L ? 'R' : this.lost.R ? 'L' : (Math.random() < 0.5 ? 'L' : 'R');
+    if (this.lost[side]) return;
+    const el = this.p['el' + side];
+    const wp = new THREE.Vector3(); el.getWorldPosition(wp);
+    const gib = this.model.gib('arm'); gib.rotation.y = this.yaw;
+    this.game.effects.gib(gib, wp, new THREE.Vector3(dir.x * 3 + rand(-1, 1), 3, dir.z * 3 + rand(-1, 1)), this.scale);
+    this.hideBone(el);
+    this.lost[side] = true;
     this.game.effects.bloodSpray(wp, dir, 1.5, true);
     this.armsOut = false;
   }
 
   makeCrawler() {
+    if (this.crawler) return;
     this.crawler = true;
-    for (const k of [this.p.kneeL, this.p.kneeR]) {
+    for (const sd of ['L', 'R']) {
+      const k = this.p['knee' + sd];
       const wp = new THREE.Vector3(); k.getWorldPosition(wp);
-      this.game.effects.gib(k, wp, new THREE.Vector3(rand(-3, 3), rand(2, 5), rand(-3, 3)), this.scale);
-      k.visible = false;
-      k.children.forEach((c) => (c.userData.part = null));
+      const gib = this.model.gib('leg'); gib.rotation.y = this.yaw;
+      this.game.effects.gib(gib, wp, new THREE.Vector3(rand(-3, 3), rand(2, 5), rand(-3, 3)), this.scale);
+      this.hideBone(k);
     }
     this.game.effects.bloodSpray(this.pos.clone().setY(0.6), UP, 2, true);
     this.speed = 0.9;
@@ -135,12 +215,12 @@ export class Zombie {
     if (this.crawler) this.fallDir = 1;
     this.impulse.copy(dir).multiplyScalar(src.kind === 'explosion' ? 5 : 1.6);
     this.impulse.y = 0;
-    this.deathPose = { arms: [rand(-2.8, -0.4), rand(-2.8, -0.4)], twist: rand(-0.5, 0.5), legs: [rand(-0.6, 0.2), rand(-0.6, 0.2)] };
-    for (const m of this.meshes) m.userData.part = null;
-    if (head && !this.headless && src.kind !== 'melee' && (chance(0.55) || src.weapon?.type === 'sniper' || src.weapon?.type === 'shotgun')) {
-      const hp = new THREE.Vector3(); this.headMesh.getWorldPosition(hp);
-      g.effects.gib(this.p.head, hp, new THREE.Vector3(dir.x * 3 + rand(-1, 1), rand(3, 5), dir.z * 3 + rand(-1, 1)), this.scale);
-      this.p.head.visible = false;
+    this.deathPose = { arms: [rand(-2.8, -0.4), rand(-2.8, -0.4)], twist: rand(-0.5, 0.5), legs: [rand(-0.6, 0.2), rand(-0.6, 0.2)], head: rand(-0.6, 0.6) };
+    if (head && !this.headless && src.kind !== 'melee' && (chance(0.5) || src.weapon?.type === 'sniper' || src.weapon?.type === 'shotgun')) {
+      const hp = new THREE.Vector3(); boneWorld(this.p.head, hp, 0, 0.095, 0.012);
+      const gib = this.model.gib('head'); gib.rotation.y = this.yaw;
+      g.effects.gib(gib, hp, new THREE.Vector3(dir.x * 3 + rand(-1, 1), rand(3, 5), dir.z * 3 + rand(-1, 1)), this.scale);
+      this.hideBone(this.p.head);
       this.headless = true;
       g.effects.bloodSpray(hp, UP, 2.2, true);
       this.neckBleed = 1.5;
@@ -162,11 +242,13 @@ export class Zombie {
     const pp = player.pos;
     if (this.state === 'dead') { this.updateDead(dt); return; }
     if (this.shockT > 0) this.shockT -= dt;
+    if (this.react > 0) this.react = Math.max(0, this.react - dt * 3.5);
+    if (this.stumble > 0) this.stumble = Math.max(0, this.stumble - dt);
     const dx = pp.x - this.pos.x, dz = pp.z - this.pos.z;
     const dist = Math.hypot(dx, dz);
     this.voiceT -= dt;
-    if (this.voiceT <= 0 && dist < 30) {
-      this.voiceT = rand(2.5, 6);
+    if (this.voiceT <= 0 && dist < 28) {
+      this.voiceT = rand(3, 7);
       g.audio.zombieVoice(this.pos.clone().setY(1.6), this.run && dist < 12 && chance(0.5) ? 'scream' : 'groan', this.type === 'brute' ? 0.55 : rand(0.9, 1.15));
     }
     let moving = 0;
@@ -174,7 +256,7 @@ export class Zombie {
       case 'rising': {
         const k = Math.min(1, this.t / 1.7);
         this.pos.y = -1.9 * (1 - smoothstep(0, 1, k));
-        if (Math.random() < 0.3) g.effects.dirtBurst(this.pos, 2);
+        if (Math.random() < 0.25) g.effects.dirtBurst(this.pos, 2);
         if (k >= 1) { this.pos.y = 0; this.state = 'chase'; }
         this.animate(dt, 'rise', 0);
         return;
@@ -202,8 +284,8 @@ export class Zombie {
       case 'windowWait': {
         const w = this.window;
         const idx = Math.max(0, w.queue.indexOf(this));
-        const side = new THREE.Vector3(-w.normal.z, 0, w.normal.x);
-        const tgt = w.outside.clone().addScaledVector(w.normal, -0.9 - idx * 0.5).addScaledVector(side, (idx % 2 ? 1 : -1) * 0.7);
+        const side = _a.set(-w.normal.z, 0, w.normal.x);
+        const tgt = _b.copy(w.outside).addScaledVector(w.normal, -0.9 - idx * 0.5).addScaledVector(side, (idx % 2 ? 1 : -1) * 0.7);
         const tx = tgt.x - this.pos.x, tz = tgt.z - this.pos.z, d = Math.hypot(tx, tz);
         if (d > 0.1) { this.pos.x += (tx / d) * 1.2 * dt; this.pos.z += (tz / d) * 1.2 * dt; moving = 1.2; }
         this.face(w.pos.x - this.pos.x, w.pos.z - this.pos.z, false, dt);
@@ -219,7 +301,7 @@ export class Zombie {
         if (pd < 1.0 && w.count <= 3 && this.attackCd <= 0 && player.alive && this.attackT <= 0) { this.attackT = 0.001; this.attackCd = 1.6; this.attackHit = false; }
         if (this.tearT <= 0) {
           this.tearT = rand(1.0, 1.5) / clamp(this.speed / 1.2, 1, 1.6);
-          if (this.game.level.tearBoard(w)) { g.audio.boardTear(w.pos.clone().setY(1.5)); this.tearAnim = 0.001; }
+          if (g.level.tearBoard(w)) { g.audio.boardTear(w.pos.clone().setY(1.5)); this.tearAnim = 0.001; }
         }
         if (w.count <= 0) { this.state = 'climbing'; this.t = 0; this.climbFrom = this.pos.clone(); }
         break;
@@ -257,23 +339,22 @@ export class Zombie {
         if (this.state === 'tearing') canHit = Math.hypot(pp.x - this.window.inside.x, pp.z - this.window.inside.z) < 1.3;
         else canHit = dist < (this.type === 'brute' ? 2.6 : 1.7);
         if (canHit && player.alive) {
-          const dmg = this.type === 'brute' ? 75 : this.crawler ? 30 : 45;
-          player.damage(dmg, this.pos);
+          player.damage(this.type === 'brute' ? 75 : this.crawler ? 30 : 45, this.pos);
           g.audio.swipe(pp.clone());
         }
         if (this.type === 'brute') {
-          g.effects.dirtBurst(this.pos.clone().addScaledVector(this.dir, 1.2), 30);
+          g.effects.dirtBurst(_a.copy(this.pos).addScaledVector(this.dir, 1.2), 30);
           g.shake(canHit ? 0.8 : 0.4);
           g.audio.bruteSlam(this.pos.clone());
         }
       }
       if (this.attackT >= 1) { this.attackT = 0; if (this.state === 'attack') this.state = 'chase'; }
     }
-    if (moving > 0.5 && dist < 18) {
+    if (moving > 0.5 && dist < 11) {
       this.footT -= dt * moving;
       if (this.footT <= 0) {
         this.footT = 0.75;
-        if (chance(0.5)) g.audio.noise({ dur: 0.08, type: 'lowpass', freq: this.type === 'brute' ? 200 : 380, gain: this.type === 'brute' ? 0.5 : 0.18, pos: this.pos.clone(), rev: 0.1 });
+        if (chance(this.type === 'brute' ? 1 : 0.35)) g.audio.noise({ dur: 0.08, type: 'lowpass', freq: this.type === 'brute' ? 200 : 380, gain: this.type === 'brute' ? 0.5 : 0.16, pos: this.pos.clone(), rev: 0.05 });
       }
     }
     if (this.tearAnim > 0) { this.tearAnim += dt * 1.6; if (this.tearAnim >= 1) this.tearAnim = 0; }
@@ -284,7 +365,7 @@ export class Zombie {
     const g = this.game;
     const nav = g.level.nav;
     this.losT -= dt;
-    if (this.losT <= 0) { this.losT = 0.25; this.hasLos = dist < 14 && nav.los(this.pos.x, this.pos.z, player.pos.x, player.pos.z); }
+    if (this.losT <= 0) { this.losT = 0.3; this.hasLos = dist < 14 && nav.los(this.pos.x, this.pos.z, player.pos.x, player.pos.z); }
     let mx, mz;
     if (this.hasLos || dist < 1.5) { mx = dx / (dist || 1); mz = dz / (dist || 1); }
     else { nav.dir(this.pos.x, this.pos.z, _d); mx = _d.x; mz = _d.z; if (!mx && !mz) { mx = dx / (dist || 1); mz = dz / (dist || 1); } }
@@ -306,6 +387,7 @@ export class Zombie {
       }
     }
     if (this.shockT > 0) speed *= 0.4;
+    if (this.stumble > 0) speed *= 0.35;
     if (this.attackT > 0) speed *= this.type === 'brute' ? 0.1 : 0.3;
     const stopDist = this.type === 'brute' ? 1.4 : 0.85;
     let moving = 0;
@@ -348,34 +430,40 @@ export class Zombie {
       if (mode === 'move') this.phase += (v / stride) * dt * Math.PI;
       const ph = this.phase, sw = Math.sin(ph), cw = Math.cos(ph);
       const amp = mode === 'idle' ? 0 : run ? 0.85 : 0.42;
+      const mv = amp > 0 ? 1 : 0;
       p.hipL.rotation.x = -sw * amp;
       p.hipR.rotation.x = sw * amp * (1 - this.limp * 0.6);
-      p.kneeL.rotation.x = 0.1 + Math.max(0, cw) * amp * 1.4;
-      p.kneeR.rotation.x = 0.1 + Math.max(0, -cw) * amp * 1.4 + this.limp * 0.2;
-      hipsY -= Math.abs(cw) * (run ? 0.06 : 0.035) * (amp > 0 ? 1 : 0) + this.limp * Math.max(0, -sw) * 0.06 * (amp > 0 ? 1 : 0);
-      p.hips.rotation.z = sw * (0.05 + this.limp * 0.08) * (amp > 0 ? 1 : 0.3);
+      p.kneeL.rotation.x = 0.12 + Math.max(0, cw) * amp * 1.4;
+      p.kneeR.rotation.x = 0.12 + Math.max(0, -cw) * amp * 1.4 + this.limp * 0.2;
+      p.ankleL.rotation.x = -Math.max(0, -cw) * amp * 0.4; p.ankleR.rotation.x = -Math.max(0, cw) * amp * 0.4 + this.limp * 0.25;
+      p.hipR.rotation.z = this.limp * 0.12;
+      hipsY -= (Math.abs(cw) * (run ? 0.06 : 0.035) + this.limp * Math.max(0, -sw) * 0.06) * mv;
+      p.hips.rotation.z = sw * (0.05 + this.limp * 0.08) * (mv ? 1 : 0.3);
       p.hips.rotation.y = sw * 0.08;
       const lean = run ? 0.42 : this.hunch;
       p.torso.rotation.x = damp(p.torso.rotation.x, lean + att * 0.35, 6, dt);
       p.torso.rotation.y = -sw * (run ? 0.25 : 0.12);
-      p.torso.rotation.z = this.tilt * 0.4;
-      p.head.rotation.x = -lean * 0.7 + Math.sin(t * 1.3) * 0.05;
+      p.torso.rotation.z = this.tilt * 0.4 + (mode === 'idle' ? Math.sin(t * 0.8) * 0.04 : 0);
+      p.neck.rotation.x = -lean * 0.35;
+      p.head.rotation.x = -lean * 0.45 + Math.sin(t * 1.3) * 0.05;
       p.head.rotation.z = this.tilt + Math.sin(t * 1.7) * 0.08;
       p.head.rotation.y = Math.sin(t * 0.9) * 0.15;
+      const dangle = (sh, el, hand, phase, sgn) => {
+        sh.rotation.x = phase * 0.35 + 0.05; sh.rotation.z = sgn * 0.1;
+        el.rotation.x = -0.25 - Math.max(0, phase) * 0.15; hand.rotation.x = 0.25;
+      };
       if (this.armsOut && !run) {
-        p.shL.rotation.x = -1.35 + Math.sin(t * 2.1) * 0.12 + sw * 0.08; p.shR.rotation.x = -1.3 + Math.sin(t * 2.3 + 1) * 0.12 - sw * 0.08;
-        p.shL.rotation.z = -0.1; p.shR.rotation.z = 0.1;
-        p.elL.rotation.x = -0.25; p.elR.rotation.x = -0.35;
+        p.shL.rotation.x = -1.35 + Math.sin(t * 2.1) * 0.12 + sw * 0.08; p.shL.rotation.z = -0.1;
+        p.elL.rotation.x = -0.25; p.handL.rotation.x = 0.35;
+        if (this.oneArm) dangle(p.shR, p.elR, p.handR, -sw, 1);
+        else { p.shR.rotation.x = -1.3 + Math.sin(t * 2.3 + 1) * 0.12 - sw * 0.08; p.shR.rotation.z = 0.1; p.elR.rotation.x = -0.35; p.handR.rotation.x = 0.4; }
       } else if (run) {
         p.shL.rotation.x = sw * 1.0 - 0.3; p.shR.rotation.x = -sw * 1.0 - 0.3;
         p.shL.rotation.z = -0.2; p.shR.rotation.z = 0.2;
         p.elL.rotation.x = -1.3; p.elR.rotation.x = -1.3;
-      } else {
-        p.shL.rotation.x = sw * 0.35 + 0.05; p.shR.rotation.x = -sw * 0.35 + 0.05;
-        p.shL.rotation.z = -0.12; p.shR.rotation.z = 0.12;
-        p.elL.rotation.x = -0.2; p.elR.rotation.x = -0.25;
-      }
-      p.jaw.rotation.x = 0.15 + Math.max(0, Math.sin(t * 7)) * 0.3;
+        p.handL.rotation.x = 0.3; p.handR.rotation.x = 0.3;
+      } else { dangle(p.shL, p.elL, p.handL, sw, -1); dangle(p.shR, p.elR, p.handR, -sw, 1); }
+      p.jaw.rotation.x = 0.12 + Math.max(0, Math.sin(t * 7)) * 0.28;
       if (this.state === 'tearing' || this.state === 'windowWait') {
         const k = this.tearAnim || 0;
         const reach = Math.sin(t * 5) * 0.3;
@@ -386,13 +474,12 @@ export class Zombie {
       }
       if (att > 0) {
         const up = smoothstep(0, 0.4, att), down = smoothstep(0.4, 0.6, att), back = smoothstep(0.65, 1, att);
-        const raise = -2.5 * up + 2.2 * down;
         const k = 1 - back;
         if (this.type === 'brute') {
           p.shL.rotation.x = lerp(p.shL.rotation.x, -2.9 * up + 2.6 * down, k); p.shR.rotation.x = lerp(p.shR.rotation.x, -2.9 * up + 2.6 * down, k);
           p.torso.rotation.x = lerp(p.torso.rotation.x, -0.3 * up + 0.9 * down, k);
         } else {
-          p.shR.rotation.x = lerp(p.shR.rotation.x, raise - 0.5, k);
+          p.shR.rotation.x = lerp(p.shR.rotation.x, -2.5 * up + 2.2 * down - 0.5, k);
           p.shR.rotation.z = lerp(0.1, 0.6 * up - 0.9 * down, k);
           p.elR.rotation.x = lerp(p.elR.rotation.x, -1.2 * up + 0.9 * down, k);
           p.shL.rotation.x = lerp(p.shL.rotation.x, -1.6, k * 0.7);
@@ -400,6 +487,19 @@ export class Zombie {
         }
         p.jaw.rotation.x = 0.55 * Math.sin(att * Math.PI);
       }
+      // hit reactions
+      if (this.react > 0) {
+        const r = this.react * this.react, sg = this.reactSgn;
+        switch (this.reactPart) {
+          case 'head': p.head.rotation.x -= 0.9 * r * sg; p.neck.rotation.x -= 0.4 * r * sg; p.torso.rotation.x -= 0.15 * r * sg; break;
+          case 'torso': p.torso.rotation.x -= 0.45 * r * sg; p.torso.rotation.y += 0.35 * r * this.reactSide; p.head.rotation.x += 0.3 * r * sg; break;
+          case 'armL': p.shL.rotation.x += 0.9 * r; p.shL.rotation.z -= 0.5 * r; p.torso.rotation.y -= 0.3 * r; break;
+          case 'armR': p.shR.rotation.x += 0.9 * r; p.shR.rotation.z += 0.5 * r; p.torso.rotation.y += 0.3 * r; break;
+          case 'legL': p.kneeL.rotation.x += 0.8 * r; hipsY -= 0.08 * r; p.hips.rotation.z -= 0.15 * r; break;
+          case 'legR': p.kneeR.rotation.x += 0.8 * r; hipsY -= 0.08 * r; p.hips.rotation.z += 0.15 * r; break;
+        }
+      }
+      if (this.stumble > 0) { hipsY -= this.stumble * 0.08; p.torso.rotation.x += this.stumble * 0.3; }
       if (this.shockT > 0) { p.torso.rotation.x -= this.shockT * 2; p.head.rotation.x -= this.shockT * 3; }
     } else if (mode === 'rise') {
       const k = Math.min(1, this.t / 1.7);
@@ -427,7 +527,8 @@ export class Zombie {
     p.hips.position.y = damp(p.hips.position.y, 0.22, 8, dt);
     p.hips.rotation.x = damp(p.hips.rotation.x, 1.35, 8, dt);
     p.torso.rotation.x = 0.1;
-    p.head.rotation.x = -1.2 + Math.sin(t * 2) * 0.1;
+    p.neck.rotation.x = -0.5;
+    p.head.rotation.x = -0.8 + Math.sin(t * 2) * 0.1;
     p.shL.rotation.x = -2.2 + sw * 0.7; p.shR.rotation.x = -2.2 - sw * 0.7;
     p.elL.rotation.x = -0.4 - Math.max(0, sw) * 0.6; p.elR.rotation.x = -0.4 - Math.max(0, -sw) * 0.6;
     p.hipL.rotation.x = 0.1; p.hipR.rotation.x = 0.1;
@@ -447,14 +548,14 @@ export class Zombie {
     if (this.pos.y > 0 && k < 1) this.pos.y = Math.max(0, this.pos.y - dt * 4);
     if (this.neckBleed > 0) {
       this.neckBleed -= dt;
-      const np = new THREE.Vector3(); p.neck.getWorldPosition(np);
-      for (let i = 0; i < 2; i++) g.effects.alpha.emit(np.x, np.y, np.z, rand(-0.8, 0.8), rand(1.5, 3.5), rand(-0.8, 0.8), { life: 0.6, size: rand(0.03, 0.07), color: [0.4, 0.01, 0.01], gravity: 9.8 });
+      boneWorld(p.neck, _a, 0, 0.1, 0);
+      for (let i = 0; i < 2; i++) g.effects.alpha.emit(_a.x, _a.y, _a.z, rand(-0.8, 0.8), rand(1.5, 3.5), rand(-0.8, 0.8), { life: 0.6, size: rand(0.03, 0.07), color: [0.4, 0.01, 0.01], gravity: 9.8 });
     }
     if (this.shockDeath > 0) {
       this.shockDeath -= dt;
       p.torso.rotation.x = Math.sin(k * 60) * 0.25; p.torso.rotation.z = Math.cos(k * 53) * 0.2;
       p.shL.rotation.x = -1.5 + Math.sin(k * 70) * 0.8; p.shR.rotation.x = -1.5 + Math.cos(k * 65) * 0.8;
-      if (Math.random() < 0.5) { const hp = new THREE.Vector3(); p.torso.getWorldPosition(hp); hp.y += 0.4 * this.scale; g.effects.electric(hp, 2); }
+      if (Math.random() < 0.4) { boneWorld(p.torso, _a, 0, 0.35, 0); g.effects.electric(_a, 2); }
       this.deadT = 0;
       return;
     }
@@ -466,7 +567,7 @@ export class Zombie {
       p.head.rotation.x = damp(p.head.rotation.x, -0.2, 4, dt);
     } else {
       const e1 = smoothstep(0, 0.35, k), e2 = smoothstep(0.15, 0.85, k);
-      const a = Math.min(1, dt * 15);
+      const a = Math.min(1, dt * 15), b = Math.min(1, dt * 6);
       p.kneeL.rotation.x = lerp(p.kneeL.rotation.x, 1.2 * e1 * (1 - e2) + 0.3 * e2, a);
       p.kneeR.rotation.x = lerp(p.kneeR.rotation.x, 1.1 * e1 * (1 - e2) + 0.4 * e2, a);
       p.hipL.rotation.x = lerp(p.hipL.rotation.x, -0.9 * e1 * (1 - e2) + d.legs[0] * e2, a);
@@ -474,27 +575,31 @@ export class Zombie {
       p.hips.position.y = lerp(this.hipsBaseY, this.hipsBaseY - 0.35, e1) * (1 - e2) + 0.17 * e2;
       p.hips.rotation.x = f * 1.48 * e2 * e2;
       p.hips.rotation.z = d.twist * e2;
-      const b = Math.min(1, dt * 6);
       p.torso.rotation.x = lerp(p.torso.rotation.x, f * 0.1, b);
       p.torso.rotation.y = lerp(p.torso.rotation.y, 0, b);
       p.shL.rotation.x = lerp(p.shL.rotation.x, f > 0 ? -2.8 : d.arms[0], b * 0.8);
       p.shR.rotation.x = lerp(p.shR.rotation.x, f > 0 ? -2.6 : d.arms[1], b * 0.8);
       p.shL.rotation.z = lerp(p.shL.rotation.z, -0.6, b); p.shR.rotation.z = lerp(p.shR.rotation.z, 0.6, b);
       p.elL.rotation.x = lerp(p.elL.rotation.x, -0.3, b); p.elR.rotation.x = lerp(p.elR.rotation.x, -0.2, b);
+      p.neck.rotation.x = lerp(p.neck.rotation.x, 0, b);
       p.head.rotation.x = lerp(p.head.rotation.x, f * 0.4, b);
-      p.head.rotation.y = lerp(p.head.rotation.y, d.twist * 2, b * 0.5);
+      p.head.rotation.y = lerp(p.head.rotation.y, d.head, b * 0.5);
       p.jaw.rotation.x = lerp(p.jaw.rotation.x, 0.5, b);
       if (k > 0.75 && !this.thudded) {
         this.thudded = true;
         g.audio.noise({ dur: 0.15, type: 'lowpass', freq: 250, gain: 0.45, pos: this.pos.clone(), rev: 0.1 });
-        if (chance(0.7)) g.effects.bloodFloor(this.pos.x + rand(-0.4, 0.4), this.pos.z + rand(-0.4, 0.4), 1.1);
+        boneWorld(p.torso, _a, 0, 0.25, 0);
+        g.effects.bloodPool(_a.x, _a.z, this.headless ? 1.6 : 1.1);
       }
     }
-    if (k > 5) this.pos.y -= dt * 0.25;
-    if (k > 7.5) this.remove = true;
+    if (k > 8) this.pos.y -= dt * 0.25;
+    if (k > 10.5) this.remove = true;
   }
 
-  dispose() { this.game.scene.remove(this.root); }
+  dispose() {
+    this.game.scene.remove(this.root);
+    this.mesh.skeleton.dispose();
+  }
 }
 
 export class ZombieManager {
@@ -502,7 +607,7 @@ export class ZombieManager {
     this.game = game;
     this.zombies = [];
     this.navT = 0;
-    this.hitList = [];
+    this._hits = [];
   }
 
   spawn(type, hp, speed, forceRise = false) {
@@ -540,16 +645,24 @@ export class ZombieManager {
       z.update(dt, player);
       if (z.remove) { z.dispose(); this.zombies.splice(i, 1); }
     }
+    // cap corpse count for performance
+    let dead = 0;
+    for (let i = this.zombies.length - 1; i >= 0; i--) {
+      const z = this.zombies[i];
+      if (!z.alive && ++dead > 14 && z.deadT < 8) z.deadT = 8;
+    }
   }
   postUpdate() { for (const z of this.zombies) z.root.updateMatrixWorld(true); }
 
-  hittable() {
-    const list = this.hitList; list.length = 0;
+  // sorted list of zombie hits along a ray
+  raycast(o, d, maxT) {
+    const hits = this._hits; hits.length = 0;
     for (const z of this.zombies) {
-      if (!z.alive) continue;
-      for (const m of z.meshes) if (m.userData.part && m.visible && m.parent.visible) list.push(m);
+      const h = z.hitTest(o, d, maxT);
+      if (h) hits.push({ zombie: z, t: h.t, part: h.part, sub: h.sub });
     }
-    return list;
+    hits.sort((a, b) => a.t - b.t);
+    return hits;
   }
 
   clear() {

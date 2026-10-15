@@ -19,6 +19,7 @@ function chalkTexture(weaponId, cost) {
   let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
   const rects = [];
   for (const p of spec.parts) {
+    if ((p[0] !== 'b' && p[0] !== 'c') || p[1] === 'dark' || p[1] === 'reddot' || p[1] === 'glass') continue;
     let x, y, w, h, rot = 0;
     if (p[0] === 'b') { const [, , , ph, pd, , py, pz, rx = 0] = p; w = pd; h = ph; x = -pz; y = -py; rot = rx; }
     else { const [, , r, len, , py, pz, axis = 'z'] = p; if (axis === 'z') { w = len; h = r * 2; } else if (axis === 'y') { w = r * 2; h = len; } else { w = r * 2; h = r * 2; } x = -pz; y = -py; }
@@ -140,7 +141,7 @@ export class Machines {
     for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i));
     uv.needsUpdate = true;
     this.scene.add(beam);
-    this.boxLight = new THREE.PointLight(0x60c8ff, 0, 7, 2); this.scene.add(this.boxLight);
+    this.boxLight = { intensity: 0, position: new THREE.Vector3() };
     this.box = { group: g, lidPivot, inner, beam, state: 'idle', t: 0, loc: 0, uses: 0, display: null, result: null, collider: null, cycleT: 0 };
     this.placeBox(0);
   }
@@ -151,7 +152,7 @@ export class Machines {
     b.beam.position.set(sp.x, 0, sp.z);
     b.front = new THREE.Vector3(Math.sin(sp.rot), 0, Math.cos(sp.rot));
     b.pos = new THREE.Vector3(sp.x, 0.8, sp.z);
-    this.boxLight.position.set(sp.x, 1.4, sp.z).addScaledVector(b.front, 0.6);
+
     if (b.collider) b.collider.active = false;
     b.collider = this.L.colBox({ x: sp.x, z: sp.z, rot: sp.rot }, 0, 0, 1.65, 0.8, 0.9, { nav: false });
   }

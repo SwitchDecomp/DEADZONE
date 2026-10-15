@@ -16,9 +16,11 @@ import { WeaponSystem } from './game/weapons.js';
 import { Powerups } from './game/powerups.js';
 import { RoundManager } from './game/rounds.js';
 import { HUD } from './ui/hud.js';
+import { prewarmZombies, buildZombie } from './game/zombieModel.js';
+import { prewarmGuns } from './game/gunModels.js';
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { sens: 1, adsSens: 0.85, fov: 80, vol: 0.8, music: 0.6, quality: 'high', invert: false, grain: true, voice: true, bright: 1.3 };
+const DEFAULTS = { v: 2, sens: 1, adsSens: 0.85, fov: 80, vol: 0.8, music: 0.6, quality: 'medium', invert: false, grain: true, voice: true, bright: 1.3 };
 const FOG_NORMAL = new THREE.Color(0x121820), FOG_RED = new THREE.Color(0x3a0806);
 const MIST_NORMAL = new THREE.Color(0x4a5560), MIST_RED = new THREE.Color(0x902018);
 const MOON_NORMAL = new THREE.Color(0x9ab0d8), MOON_RED = new THREE.Color(0xff5030);
@@ -29,6 +31,7 @@ class Game {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem('deadzone.settings') || '{}'); } catch (e) { saved = {}; }
     this.settings = { ...DEFAULTS, ...saved };
+    if (saved.v !== 2) { this.settings.quality = 'medium'; this.settings.v = 2; }
     this.quality = this.settings.quality;
     try { this.best = JSON.parse(localStorage.getItem('deadzone.best') || '{"round":0,"kills":0}'); } catch (e) { this.best = { round: 0, kills: 0 }; }
     this.time = 0;
@@ -50,7 +53,7 @@ class Game {
     const r = (this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false }));
     r.setSize(window.innerWidth, window.innerHeight);
     r.shadowMap.enabled = true;
-    r.shadowMap.type = THREE.PCFSoftShadowMap;
+    r.shadowMap.type = THREE.PCFShadowMap;
     r.toneMapping = THREE.ACESFilmicToneMapping;
     r.toneMappingExposure = this.settings.bright;
     r.outputColorSpace = THREE.SRGBColorSpace;
@@ -82,7 +85,11 @@ class Game {
     this.machines = new Machines(this);
     this.level.nav.build(this.level.colliders, this.level.zones);
     this.level.snapshotLights();
-    progress(0.94, 'RAISING THE DEAD');
+    progress(0.92, 'RAISING THE DEAD');
+    await new Promise((res) => setTimeout(res, 20));
+    prewarmZombies(this.textures);
+    prewarmGuns();
+    progress(0.96, 'ARMING');
     await new Promise((res) => setTimeout(res, 20));
 
     this.audio = new AudioEngine();
@@ -106,7 +113,17 @@ class Game {
     progress(1, 'COMPILING SHADERS');
     await new Promise((res) => setTimeout(res, 20));
     this.setupMenuScene();
+    // warm up shader programs (skinned zombies, every weapon model) to avoid in-game hitches
+    const warm = [buildZombie(this.textures, 'walker'), buildZombie(this.textures, 'brute')];
+    warm.forEach((w, i) => { w.root.position.set(i * 2, 0, -3); this.scene.add(w.root); });
+    const ids = ['pistol', 'smg', 'shotgun', 'ar', 'burst', 'lmg', 'sniper', 'volt'];
+    const vms = [];
+    for (const id of ids) for (const up of [false, true]) { const m = this.weapons.model(id, up); this.weapons.holder.add(m.root); vms.push(m.root); }
+    this.vmScene.visible = true;
     try { r.compile(this.scene, this.camera); r.compile(this.vmScene, this.vmCamera); } catch (e) { /* ignore */ }
+    this.vmScene.visible = false;
+    warm.forEach((w) => { this.scene.remove(w.root); w.mesh.skeleton.dispose(); });
+    for (const v of vms) if (v !== this.weapons.gm.root) this.weapons.holder.remove(v);
 
     $('loading').classList.remove('show');
     this.showScreen('menu');
@@ -142,7 +159,7 @@ class Game {
     const s = this.settings;
     this.quality = s.quality;
     const dpr = window.devicePixelRatio || 1;
-    this.pixelRatio = s.quality === 'low' ? Math.min(dpr, 1) * 0.75 : s.quality === 'medium' ? Math.min(dpr, 1) : s.quality === 'high' ? Math.min(dpr, 1.5) : Math.min(dpr, 2);
+    this.pixelRatio = s.quality === 'low' ? Math.min(dpr, 1) * 0.75 : s.quality === 'medium' ? Math.min(dpr, 1) : s.quality === 'high' ? Math.min(dpr, 1.25) : Math.min(dpr, 2);
     const shadows = s.quality !== 'low';
     if (this.renderer.shadowMap.enabled !== shadows) {
       this.renderer.shadowMap.enabled = shadows;
@@ -153,7 +170,7 @@ class Game {
       this.moon.shadow.mapSize.set(ms, ms);
       if (this.moon.shadow.map) { this.moon.shadow.map.dispose(); this.moon.shadow.map = null; }
     }
-    if (this.level.truckLight) this.level.truckLight.light.castShadow = s.quality === 'high' || s.quality === 'ultra';
+    if (this.level.truckLight) this.level.truckLight.light.castShadow = s.quality === 'ultra';
     this.renderer.toneMappingExposure = s.bright;
     if (this._q !== s.quality) { this._q = s.quality; this.post.setQuality(s.quality); }
     this.post.u.uGrain.value = s.grain ? 0.05 : 0;
@@ -371,9 +388,9 @@ class Game {
   }
 
   // ---------------- COMBAT ----------------
-  hitZombie(z, dmg, part, point, dir, src) {
+  hitZombie(z, dmg, part, point, dir, src, sub) {
     if (!z.alive) return;
-    const res = z.damage(dmg, part, point, dir, src);
+    const res = z.damage(dmg, part, point, dir, src, sub);
     if (this.state === 'menu') return;
     this.stats.hits++;
     this.hud.hitmarker(res.killed);

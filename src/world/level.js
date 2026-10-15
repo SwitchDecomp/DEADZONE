@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { NavGrid } from './nav.js';
 import { rand, TAU, clamp } from '../core/utils.js';
 import { buildProps } from './props.js';
@@ -56,7 +57,20 @@ export class Level {
   addCollider(minX, maxX, minY, maxY, minZ, maxZ, flags = {}) {
     const c = { minX, maxX, minY, maxY, minZ, maxZ, active: true, bullets: true, player: true, nav: true, zombie: true, ...flags };
     this.colliders.push(c);
+    this.gridDirty = true;
     return c;
+  }
+  buildGrid() {
+    const cs = 4, grid = new Map();
+    for (const c of this.colliders) {
+      if (!c.player && !c.zombie) continue;
+      for (let i = Math.floor(c.minX / cs); i <= Math.floor(c.maxX / cs); i++) for (let j = Math.floor(c.minZ / cs); j <= Math.floor(c.maxZ / cs); j++) {
+        const k = i * 4096 + j;
+        let a = grid.get(k); if (!a) grid.set(k, (a = []));
+        a.push(c);
+      }
+    }
+    this.grid = grid; this.gridDirty = false; this.stamp = 0;
   }
   box(key, x, y, z, w, h, d, { collide = true, rotY = 0, shadow = true, flags } = {}) {
     const g = new THREE.BoxGeometry(w, h, d);
@@ -77,7 +91,9 @@ export class Level {
     return geo;
   }
   pbox(key, T, lx, ly, lz, w, h, d, opts) {
-    const g = new THREE.BoxGeometry(w, h, d); g.translate(lx, ly, lz);
+    const m = Math.min(w, h, d);
+    const g = m > 0.03 ? new RoundedBoxGeometry(w, h, d, 2, Math.min(0.035, m * 0.22)) : new THREE.BoxGeometry(w, h, d);
+    g.translate(lx, ly, lz);
     return this.part(key, g, T, opts);
   }
   pcyl(key, T, lx, ly, lz, r, h, axis = 'y', seg = 14, opts, r2) {
@@ -381,24 +397,35 @@ export class Level {
   }
 
   collide(pos, r, y0, y1, who = 'player') {
+    if (this.gridDirty) this.buildGrid();
+    const cs = 4, grid = this.grid;
     let hit = false;
     for (let iter = 0; iter < 2; iter++) {
-      for (const c of this.colliders) {
-        if (!c.active || !c[who]) continue;
-        if (c.maxY <= y0 || c.minY >= y1) continue;
-        if (pos.x < c.minX - r || pos.x > c.maxX + r || pos.z < c.minZ - r || pos.z > c.maxZ + r) continue;
-        const qx = clamp(pos.x, c.minX, c.maxX), qz = clamp(pos.z, c.minZ, c.maxZ);
-        const dx = pos.x - qx, dz = pos.z - qz;
-        const d2 = dx * dx + dz * dz;
-        if (d2 > r * r) continue;
-        hit = true;
-        if (d2 > 1e-8) {
-          const d = Math.sqrt(d2), push = r - d;
-          pos.x += (dx / d) * push; pos.z += (dz / d) * push;
-        } else {
-          const l = pos.x - c.minX, rr = c.maxX - pos.x, b = pos.z - c.minZ, f = c.maxZ - pos.z;
-          const m = Math.min(l, rr, b, f);
-          if (m === l) pos.x = c.minX - r; else if (m === rr) pos.x = c.maxX + r; else if (m === b) pos.z = c.minZ - r; else pos.z = c.maxZ + r;
+      const stamp = ++this.stamp;
+      const i0 = Math.floor((pos.x - r) / cs), i1 = Math.floor((pos.x + r) / cs);
+      const j0 = Math.floor((pos.z - r) / cs), j1 = Math.floor((pos.z + r) / cs);
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+        const list = grid.get(i * 4096 + j);
+        if (!list) continue;
+        for (const c of list) {
+          if (c._stamp === stamp) continue;
+          c._stamp = stamp;
+          if (!c.active || !c[who]) continue;
+          if (c.maxY <= y0 || c.minY >= y1) continue;
+          if (pos.x < c.minX - r || pos.x > c.maxX + r || pos.z < c.minZ - r || pos.z > c.maxZ + r) continue;
+          const qx = clamp(pos.x, c.minX, c.maxX), qz = clamp(pos.z, c.minZ, c.maxZ);
+          const dx = pos.x - qx, dz = pos.z - qz;
+          const d2 = dx * dx + dz * dz;
+          if (d2 > r * r) continue;
+          hit = true;
+          if (d2 > 1e-8) {
+            const d = Math.sqrt(d2), push = r - d;
+            pos.x += (dx / d) * push; pos.z += (dz / d) * push;
+          } else {
+            const l = pos.x - c.minX, rr = c.maxX - pos.x, b = pos.z - c.minZ, f = c.maxZ - pos.z;
+            const m = Math.min(l, rr, b, f);
+            if (m === l) pos.x = c.minX - r; else if (m === rr) pos.x = c.maxX + r; else if (m === b) pos.z = c.minZ - r; else pos.z = c.maxZ + r;
+          }
         }
       }
     }

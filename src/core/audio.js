@@ -82,7 +82,7 @@ export class AudioEngine {
     const g = ctx.createGain();
     if (pos) {
       const p = ctx.createPanner();
-      p.panningModel = 'HRTF'; p.distanceModel = 'inverse';
+      p.panningModel = 'equalpower'; p.distanceModel = 'inverse';
       p.refDistance = 2.5; p.rolloffFactor = 1.1; p.maxDistance = 80;
       if (p.positionX) { p.positionX.value = pos.x; p.positionY.value = pos.y; p.positionZ.value = pos.z; }
       else p.setPosition(pos.x, pos.y, pos.z);
@@ -258,7 +258,7 @@ export class AudioEngine {
 
   // ---------------- ZOMBIES ----------------
   zombieVoice(pos, kind = 'groan', pitch = 1) {
-    if (!this.ctx || this.activeVoices > 7) return;
+    if (!this.ctx || this.activeVoices > 6) return;
     const ctx = this.ctx, t = ctx.currentTime;
     const dur = kind === 'scream' ? rand(0.6, 1.1) : kind === 'attack' ? rand(0.35, 0.6) : kind === 'death' ? rand(0.7, 1.1) : rand(0.9, 1.8);
     const base = (kind === 'scream' ? rand(170, 260) : kind === 'attack' ? rand(110, 150) : rand(70, 115)) * pitch;

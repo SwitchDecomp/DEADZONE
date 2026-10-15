@@ -100,7 +100,10 @@ class ParticleSystem {
       i++;
     }
     this.points.geometry.setDrawRange(0, this.n);
-    this.aPos.needsUpdate = this.aCol.needsUpdate = this.aAlpha.needsUpdate = this.aSize.needsUpdate = this.aRot.needsUpdate = true;
+    if (this.n === 0 && this.lastN === 0) return;
+    this.lastN = this.n;
+    const n = Math.max(1, this.n);
+    for (const a of [this.aPos, this.aCol, this.aAlpha, this.aSize, this.aRot]) { a.clearUpdateRanges(); a.addUpdateRange(0, n * a.itemSize); a.needsUpdate = true; }
   }
   _kill(i) {
     const last = --this.n;
@@ -140,7 +143,27 @@ class DecalPool {
     this.mesh.count = this.filled;
     this.mesh.instanceMatrix.needsUpdate = true;
   }
-  clear() { this.mesh.count = 0; this.filled = 0; this.i = 0; }
+  addGrow(pos, normal, size, dur) {
+    const idx = this.i;
+    this.add(pos, normal, size * 0.15);
+    this.grow = this.grow || [];
+    this.grow.push({ idx, p: this._p.clone(), q: this._q.clone(), s0: size * 0.15, s1: size, t: 0, dur });
+  }
+  update(dt) {
+    if (!this.grow || !this.grow.length) return;
+    for (let i = this.grow.length - 1; i >= 0; i--) {
+      const g = this.grow[i];
+      g.t += dt;
+      const k = Math.min(1, g.t / g.dur), e = 1 - (1 - k) * (1 - k);
+      const sc = g.s0 + (g.s1 - g.s0) * e;
+      this._s.set(sc, sc, sc);
+      this._m.compose(g.p, g.q, this._s);
+      this.mesh.setMatrixAt(g.idx, this._m);
+      if (k >= 1) this.grow.splice(i, 1);
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+  clear() { this.mesh.count = 0; this.filled = 0; this.i = 0; this.grow = []; }
 }
 
 export class Effects {
@@ -156,6 +179,7 @@ export class Effects {
     this.holes = new DecalPool(scene, T.bulletHole, 160, { rough: 0.9 });
     this.bloods = T.blood.map((t) => new DecalPool(scene, t, 50, { rough: 0.15 }));
     this.scorch = new DecalPool(scene, T.scorch, 20, { rough: 1 });
+    this.pools = new DecalPool(scene, T.blood[0], 24, { rough: 0.08 });
     this.tracers = [];
     const tg = new THREE.BoxGeometry(0.012, 0.012, 1);
     const tm = new THREE.MeshBasicMaterial({ color: 0xffd890, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
@@ -177,7 +201,8 @@ export class Effects {
   }
 
   buildRain() {
-    const N = this.game.quality === 'low' ? 1200 : 3200;
+    const q = this.game.quality;
+    const N = q === 'low' ? 900 : q === 'medium' ? 1800 : 2800;
     this.rainN = N;
     this.rainPos = new Float32Array(N * 6);
     this.rainData = new Float32Array(N * 4);
@@ -223,9 +248,8 @@ export class Effects {
       m.rotation.x = -Math.PI / 2; m.position.y = y; m.renderOrder = 3;
       this.scene.add(m); this.fogLayers.push(m);
     };
-    mk(0.18, 0.5, 14, 0.008);
-    mk(0.55, 0.35, 18, -0.006);
-    mk(1.1, 0.18, 24, 0.004);
+    mk(0.2, 0.55, 14, 0.008);
+    mk(0.8, 0.3, 20, -0.005);
   }
 
   setFogColor(c) { for (const f of this.fogLayers) f.material.uniforms.uColor.value.copy(c); }
@@ -244,6 +268,7 @@ export class Effects {
     if (Math.random() < 0.35 * amount) this.bloodFloor(p.x + dir.x * rand(0.3, 1.2), p.z + dir.z * rand(0.3, 1.2), 0.6);
   }
   bloodDecal(p, n, size) { pick(this.bloods).add(p, n, size); }
+  bloodPool(x, z, size = 1) { this.pools.addGrow(new THREE.Vector3(x, 0.002, z), new THREE.Vector3(0, 1, 0), size * rand(1.4, 2.0), rand(3, 5)); }
   bloodFloor(x, z, size = 1) { this.bloodDecal(this._tmpV.set(x, 0, z), new THREE.Vector3(0, 1, 0), size * rand(0.6, 1.3)); }
 
   impact(p, n, surface = 'concrete') {
@@ -411,6 +436,7 @@ export class Effects {
     }
     this.rainAttr.needsUpdate = true;
     for (const f of this.fogLayers) { f.material.uniforms.uTime.value += dt; f.material.uniforms.uCam.value.copy(cp); }
+    this.pools.update(dt);
     for (const t of this.tracers) {
       if (!t.active) continue;
       t.t += dt;
@@ -454,7 +480,7 @@ export class Effects {
 
   clear() {
     for (const s of this.systems) s.clear();
-    this.holes.clear(); this.scorch.clear(); this.bloods.forEach((b) => b.clear());
+    this.holes.clear(); this.scorch.clear(); this.pools.clear(); this.bloods.forEach((b) => b.clear());
     for (const gb of this.gibs) this.scene.remove(gb.mesh);
     this.gibs = [];
     for (const b of this.bolts) for (const l of b.lines) this.scene.remove(l);

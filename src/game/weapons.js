@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { WEAPONS, upgradeDef } from './weaponData.js';
 import { buildGun, gunMaterials } from './gunModels.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clamp, damp, lerp, rand, smoothstep, TAU } from '../core/utils.js';
 
 const _o = new THREE.Vector3(), _d = new THREE.Vector3(), _t = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3();
@@ -8,26 +10,81 @@ const Y = new THREE.Vector3(0, 1, 0);
 const NO_ACT = ['melee', 'grenade', 'drink', 'switching', 'forging'];
 
 let ARM_MATS = null;
-function makeArm(T, side) {
+const _am = new THREE.Matrix4(), _aq = new THREE.Quaternion(), _ae = new THREE.Euler(), _as = new THREE.Vector3(1, 1, 1), _ap = new THREE.Vector3();
+function placed(geo, x, y, z, rx = 0, ry = 0, rz = 0) { _ae.set(rx, ry, rz); _aq.setFromEuler(_ae); _am.compose(_ap.set(x, y, z), _aq, _as); geo.applyMatrix4(_am); return geo; }
+function rbox(w, h, d, r) { return new RoundedBoxGeometry(w, h, d, 2, r ?? Math.min(w, h, d) * 0.4); }
+function cylAlong(r0, r1, len, from, dir, wrinkle = 0) {
+  const g = new THREE.CylinderGeometry(r1, r0, len, 14, 8, true);
+  if (wrinkle) {
+    const P = g.attributes.position;
+    for (let i = 0; i < P.count; i++) {
+      const x = P.getX(i), y = P.getY(i), z = P.getZ(i), a = Math.atan2(z, x);
+      const k = 1 + wrinkle * Math.sin(y * 70 + Math.sin(a * 3) * 2.5) * (0.6 + 0.4 * Math.sin(a * 2 + y * 20));
+      P.setXYZ(i, x * k, y, z * k);
+    }
+    g.computeVertexNormals();
+  }
+  g.translate(0, len / 2, 0);
+  g.applyQuaternion(_aq.setFromUnitVectors(Y, dir));
+  g.translate(from.x, from.y, from.z);
+  return g;
+}
+const armCache = new Map();
+function armGeometry(side, grip, R) {
+  const key = `${side}|${grip}|${R}`;
+  if (armCache.has(key)) return armCache.get(key);
+  const s = side, hand = [], sleeve = [], watch = [];
+  if (grip !== 'open') {
+    hand.push(placed(rbox(0.024, 0.094, 0.074), s * (R + 0.012), -0.004, 0.004));
+    hand.push(placed(rbox(0.011, 0.07, 0.05, 0.005), s * (R + 0.026), 0.002, -0.004));
+    const fy = [0.034, 0.012, -0.01, -0.031], fl = [1, 1.06, 1.0, 0.85];
+    for (let i = 0; i < 4; i++) {
+      const y = fy[i], L = fl[i];
+      hand.push(placed(rbox(0.018, 0.0175, 0.03 * L), s * (R + 0.006), y, -R * 0.9 - 0.008, 0, s * 0.35, 0));
+      hand.push(placed(rbox(0.024 * L + R * 0.6, 0.0165, 0.016), s * 0.004, y, -(R + 0.011), 0, 0, 0));
+      hand.push(placed(rbox(0.015, 0.0155, 0.02 * L), -s * (R + 0.004), y, -R * 0.55, 0, -s * 0.45, 0));
+    }
+    hand.push(placed(rbox(0.02, 0.022, 0.042), -s * R * 0.45, 0.054, -0.002, 0.25, 0, 0));
+    hand.push(placed(rbox(0.017, 0.018, 0.03), -s * (R + 0.005), 0.047, -0.028, 0.35, -s * 0.3, 0));
+    if (grip === 'h') hand.forEach((g) => g.rotateX(-Math.PI / 2));
+  } else {
+    hand.push(placed(rbox(0.026, 0.09, 0.075), 0, 0, 0));
+    for (let i = 0; i < 4; i++) {
+      hand.push(placed(rbox(0.017, 0.016, 0.03), -s * 0.004, 0.031 - i * 0.019, -0.048, 0, 0, 0));
+      hand.push(placed(rbox(0.016, 0.015, 0.024), -s * 0.014, 0.031 - i * 0.019, -0.062, 0, -s * 0.9, 0));
+    }
+    hand.push(placed(rbox(0.018, 0.02, 0.038), -s * 0.02, 0.035, -0.02, 0.3, -s * 0.5, 0));
+  }
+  // wrist attach point (bottom-back of palm)
+  const W = grip === 'open' ? new THREE.Vector3(0, -0.05, 0.012) : grip === 'h' ? new THREE.Vector3(s * (R + 0.012), 0.012, 0.05) : new THREE.Vector3(s * (R + 0.012), -0.05, 0.012);
+  const dir = new THREE.Vector3(s * 0.18, -0.32, 0.9).normalize();
+  hand.push(cylAlong(0.03, 0.033, 0.075, W.clone().addScaledVector(dir, -0.012), dir));
+  sleeve.push(cylAlong(0.035, 0.047, 0.34, W.clone().addScaledVector(dir, 0.055), dir, 0.05));
+  sleeve.push(cylAlong(0.05, 0.052, 0.05, W.clone().addScaledVector(dir, 0.21), dir, 0.08));
+  sleeve.push(cylAlong(0.048, 0.056, 0.42, W.clone().addScaledVector(dir, 0.38), dir, 0.04));
+  if (s < 0) {
+    const up = new THREE.Vector3(0, 1, 0).sub(dir.clone().multiplyScalar(dir.y)).normalize();
+    const wp = W.clone().addScaledVector(dir, 0.08).addScaledVector(up, 0.034);
+    const face = rbox(0.03, 0.034, 0.009, 0.004); face.lookAt(up); face.translate(wp.x, wp.y, wp.z);
+    watch.push(face);
+    watch.push(cylAlong(0.036, 0.036, 0.018, W.clone().addScaledVector(dir, 0.071), dir));
+  }
+  const merge = (list) => (list.length ? mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g)).map((g) => { const c = new THREE.BufferGeometry(); c.setAttribute('position', g.attributes.position); c.setAttribute('normal', g.attributes.normal); c.setAttribute('uv', g.attributes.uv); return c; }), false) : null);
+  const out = { hand: merge(hand), sleeve: merge(sleeve), watch: merge(watch) };
+  armCache.set(key, out);
+  return out;
+}
+function makeArm(T, side, grip = 'open', R = 0.019) {
   const M = gunMaterials(T);
   if (!ARM_MATS) ARM_MATS = {
-    glove: new THREE.MeshStandardMaterial({ map: T.glove.map, normalMap: T.glove.normalMap, roughness: 0.75, color: 0x8a8a8a }),
-    sleeve: new THREE.MeshStandardMaterial({ map: T.camo.map, normalMap: T.camo.normalMap, roughness: 1 }),
+    glove: new THREE.MeshStandardMaterial({ map: T.glove.map, normalMap: T.glove.normalMap, roughness: 0.78, color: 0x9a9a92, normalScale: new THREE.Vector2(1.5, 1.5) }),
+    sleeve: new THREE.MeshStandardMaterial({ map: T.camo.map, normalMap: T.camo.normalMap, roughness: 1, normalScale: new THREE.Vector2(1.3, 1.3) }),
   };
-  const { glove, sleeve } = ARM_MATS;
+  const geo = armGeometry(side, grip, R);
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.085, 0.095), glove));
-  const fingers = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.04, 0.06), glove);
-  fingers.position.set(-side * 0.012, 0.01, -0.04); g.add(fingers);
-  const thumb = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.05), glove);
-  thumb.position.set(-side * 0.03, 0.035, -0.02); g.add(thumb);
-  const dir = new THREE.Vector3(side * 0.18, -0.32, 0.9).normalize();
-  const q = new THREE.Quaternion().setFromUnitVectors(Y, dir);
-  const add = (geo, mat, dist) => { const m = new THREE.Mesh(geo, mat); m.quaternion.copy(q); m.position.copy(dir).multiplyScalar(dist); g.add(m); };
-  add(new THREE.CylinderGeometry(0.03, 0.033, 0.06, 10), glove, 0.06);
-  add(new THREE.CylinderGeometry(0.041, 0.041, 0.035, 12), M.poly, 0.11);
-  add(new THREE.CylinderGeometry(0.038, 0.048, 0.34, 12), sleeve, 0.26);
-  add(new THREE.CylinderGeometry(0.05, 0.056, 0.4, 12), sleeve, 0.6);
+  g.add(new THREE.Mesh(geo.hand, ARM_MATS.glove));
+  g.add(new THREE.Mesh(geo.sleeve, ARM_MATS.sleeve));
+  if (geo.watch) g.add(new THREE.Mesh(geo.watch, M.gun));
   g.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
   return g;
 }
@@ -85,7 +142,6 @@ export class WeaponSystem {
     this.holder = new THREE.Group(); this.kick.add(this.holder);
     this.models = new Map();
     this.grenades = [];
-    this.raycaster = new THREE.Raycaster();
     const fm = new THREE.MeshBasicMaterial({ map: this.T.flash, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, color: 0xffd8a0 });
     this.flashMat = fm;
     this.flash = new THREE.Group();
@@ -113,7 +169,7 @@ export class WeaponSystem {
     const tip = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.02, 0.04), M.chrome); tip.position.set(0, 0.006, -0.23); tip.rotation.x = 0.4; this.knife.add(tip);
     this.knife.add(new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.035, 0.1), M.rubber));
     const guard = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.06, 0.012), M.gun); guard.position.z = -0.05; this.knife.add(guard);
-    this.knife.add(makeArm(this.T, -1));
+    this.knife.add(makeArm(this.T, -1, 'open'));
     this.knife.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
     this.knife.visible = false;
     this.vmScene.add(this.knife);
@@ -123,14 +179,14 @@ export class WeaponSystem {
     this.bottle.add(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.14, 12), this.bottleMat));
     const bn = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.03, 0.06, 10), this.bottleMat); bn.position.y = 0.1; this.bottle.add(bn);
     this.bottle.add(new THREE.Mesh(new THREE.CylinderGeometry(0.0355, 0.0355, 0.06, 12), new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 0.6 })));
-    const barm = makeArm(this.T, 1); barm.position.set(0.02, -0.02, 0.03); this.bottle.add(barm);
+    const barm = makeArm(this.T, 1, 'open'); barm.position.set(0.02, -0.02, 0.03); this.bottle.add(barm);
     this.bottle.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
     this.bottle.visible = false;
     this.vmScene.add(this.bottle);
     // grenade hand
     this.nadeHand = new THREE.Group();
     const gb = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), M.olive); gb.scale.y = 1.25; this.nadeHand.add(gb);
-    const garm = makeArm(this.T, -1); garm.position.set(0.0, -0.03, 0.03); this.nadeHand.add(garm);
+    const garm = makeArm(this.T, -1, 'open'); garm.position.set(0.0, -0.03, 0.03); this.nadeHand.add(garm);
     this.nadeHand.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
     this.nadeHand.visible = false;
     this.vmScene.add(this.nadeHand);
@@ -164,8 +220,9 @@ export class WeaponSystem {
     const key = id + (up ? '+' : '');
     if (!this.models.has(key)) {
       const gm = buildGun(id, this.T, up);
-      const right = makeArm(this.T, 1); right.position.fromArray(gm.spec.rightGrip); gm.root.add(right);
-      const left = makeArm(this.T, -1); left.position.fromArray(gm.spec.left); left.rotation.z = -0.3; gm.root.add(left);
+      const lg = gm.spec.leftGrip;
+      const right = makeArm(this.T, 1, 'v', gm.spec.gripR); right.position.fromArray(gm.spec.rightGrip); right.rotation.x = gm.spec.gripRx ?? -0.3; gm.root.add(right);
+      const left = makeArm(this.T, -1, lg.type, lg.r); left.position.fromArray(lg.pos); if (lg.type === 'v') left.rotation.x = gm.spec.gripRx ?? -0.3; gm.root.add(left);
       gm.right = right; gm.left = left; gm.leftHome = left.position.clone();
       for (const n of Object.values(gm.named)) n.userData.home = n.position.clone();
       gm.root.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
@@ -262,7 +319,7 @@ export class WeaponSystem {
       case 'drink': if (this.stateT > 2.1) { this.state = 'raise'; this.stateT = 0; this.game.audio.weaponRaise(); } break;
     }
 
-    if (canAct && (this.state === 'idle' || (this.state === 'reload' && def.perShell && s.mag > 0)) && !p.sprinting) {
+    if (canAct && (this.state === 'idle' || (this.state === 'reload' && def.perShell && s.mag > 0)) && !p.sprinting && this.sprintK < 0.35) {
       const trig = def.auto ? input.mouse.left : input.mouse.leftPressed;
       if (this.burstLeft > 0) {
         if (this.fireCd <= 0) {
@@ -362,25 +419,23 @@ export class WeaponSystem {
   hitscan(origin, dir, def, tracer) {
     const g = this.game;
     const wall = g.level.raycast(origin, dir, 150);
-    this.raycaster.set(origin, dir);
-    this.raycaster.far = wall.t;
-    const hits = this.raycaster.intersectObjects(g.zombies.hittable(), false);
+    const hits = g.zombies.raycast(origin, dir, wall.t);
     let pen = def.pen;
-    const done = new Set();
     let end = null;
     for (const h of hits) {
-      const z = h.object.userData.zombie;
-      if (!z || done.has(z) || !z.alive) continue;
-      done.add(z);
-      const part = h.object.userData.part;
+      const z = h.zombie;
+      if (!z.alive) continue;
+      const point = origin.clone().addScaledVector(dir, h.t);
+      const part = h.part;
       let dmg = def.dmg * (part === 'head' ? def.headMult : part === 'limb' ? 0.8 : 1);
-      if (def.pellets > 1) dmg *= clamp(1.3 - h.distance / 14, 0.25, 1.3);
+      if (def.pellets > 1) dmg *= clamp(1.3 - h.t / 14, 0.25, 1.3);
       dmg *= Math.pow(0.75, def.pen - pen);
-      g.effects.bloodSpray(h.point, dir, def.pellets > 1 ? 0.5 : 1);
-      if (part === 'head') g.audio.headshot(h.point.clone()); else g.audio.hitFlesh(h.point.clone());
-      g.hitZombie(z, dmg, part, h.point, dir, { kind: 'bullet', weapon: def });
+      g.effects.bloodSpray(point, dir, def.pellets > 1 ? 0.5 : 1);
+      if (def.pellets === 1 && def.dmg >= 60) g.effects.bloodSpray(point.clone().addScaledVector(dir, 0.25), dir, 0.6);
+      if (part === 'head') g.audio.headshot(point); else g.audio.hitFlesh(point);
+      g.hitZombie(z, dmg, part, point, dir, { kind: 'bullet', weapon: def }, h.sub);
       pen--;
-      if (pen <= 0) { end = h.point.clone(); break; }
+      if (pen <= 0) { end = point; break; }
     }
     const endPt = end || origin.clone().addScaledVector(dir, wall.t);
     if (!end && wall.hit) {

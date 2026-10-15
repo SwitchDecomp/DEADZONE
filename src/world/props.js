@@ -120,7 +120,7 @@ function policeCar(L, x, z, rot) {
   rec.mats = [red, blue];
 }
 
-function streetLamp(L, x, z, armRot) {
+function streetLamp(L, x, z, armRot, withLight = true) {
   const T = { x, z, rot: armRot };
   L.pcyl('darkSteel', T, 0, 3, 0, 0.08, 6, 'y', 8, undefined, 0.12);
   L.pcyl('darkSteel', T, 0, 0.25, 0, 0.18, 0.5, 'y', 8);
@@ -129,11 +129,11 @@ function streetLamp(L, x, z, armRot) {
   L.pbox('lampWarm', T, 0, 5.82, 1.45, 0.32, 0.03, 0.5);
   L.colBox(T, 0, 0, 0.3, 0.3, 6);
   const p = L.localToWorld(T, 0, 5.6, 1.45);
-  const rec = L.addLight({ pos: p, color: 0xffa04a, intensity: 55, distance: 22, flicker: 'sway' });
-  const c = new THREE.Mesh(new THREE.ConeGeometry(2.6, 5.7, 24, 1, true), L.M.cone(0xffa04a, 0.09));
+  const rec = withLight ? L.addLight({ pos: p, color: 0xffa04a, intensity: 55, distance: 22, flicker: 'sway' }) : null;
+  const c = new THREE.Mesh(new THREE.ConeGeometry(2.6, 5.7, 24, 1, true), L.M.cone(0xffa04a, withLight ? 0.09 : 0.05));
   c.geometry.translate(0, -2.85, 0);
   c.position.copy(p).setY(5.8);
-  c.userData.base = 0.09; c.userData.light = rec;
+  c.userData.base = withLight ? 0.09 : 0.05; c.userData.light = rec;
   L.scene.add(c); L.cones.push(c);
   return rec;
 }
@@ -253,16 +253,20 @@ function rubble(L, x0, z0, x1, z1, n, key = 'concrete') {
   }
 }
 
-function fluoro(L, x, z, y, zone, len = 1.4) {
+function fluoroBank(L, spots, y, zone) {
   const mat = L.M.lampCool.clone();
   mat.emissive.set(0xff1a10); mat.emissiveIntensity = 2;
-  const g = new THREE.Mesh(new THREE.BoxGeometry(len, 0.05, 0.22), mat);
-  g.position.set(x, y, z); L.scene.add(g);
-  const h = new THREE.Mesh(new THREE.BoxGeometry(len + 0.1, 0.08, 0.3), L.M.darkSteel);
-  h.position.set(x, y + 0.06, z); L.scene.add(h);
-  const rec = L.addLight({ pos: new THREE.Vector3(x, y - 0.3, z), color: 0xff2010, intensity: 12, distance: 16, flicker: 'emergency', zone, powered: true });
+  let cx = 0, cz = 0;
+  for (const [x, z, len] of spots) {
+    const g = new THREE.Mesh(new THREE.BoxGeometry(len, 0.05, 0.22), mat);
+    g.position.set(x, y, z); L.scene.add(g);
+    const h = new THREE.Mesh(new THREE.BoxGeometry(len + 0.1, 0.08, 0.3), L.M.darkSteel);
+    h.position.set(x, y + 0.06, z); L.scene.add(h);
+    cx += x / spots.length; cz += z / spots.length;
+  }
+  const rec = L.addLight({ pos: new THREE.Vector3(cx, y - 0.35, cz), color: 0xff2010, intensity: 16, distance: 22, flicker: 'emergency', zone, powered: true });
   rec.color = new THREE.Color(0xdde8ff);
-  rec.poweredBase = 34; rec.powerFlicker = 'fluoro'; rec.mat = mat;
+  rec.poweredBase = 48; rec.powerFlicker = 'fluoro'; rec.mat = mat;
   return rec;
 }
 
@@ -337,7 +341,7 @@ export function buildProps(L) {
   barrel(L, 11.2, -4.0, 'rustBlue'); barrel(L, -11.1, -8.5, 'rustRed'); barrel(L, -11.0, -7.7, 'rust');
   barrel(L, 2.5, 10.9, 'rust', true, true);
   streetLamp(L, -11.4, -5.2, PI / 2);
-  streetLamp(L, 11.4, 10.2, -PI / 2);
+  streetLamp(L, 11.4, 10.2, -PI / 2, false);
   bodyBag(L, -3.8, 4.5, 0.3); bodyBag(L, -3.7, 5.6, 0.1); bodyBag(L, -3.4, 2.8, -0.2);
   rubble(L, -11.5, -11.5, 11.5, 11.5, 70);
   for (let x = -11.5; x <= 11.5; x += 0.5) {
@@ -368,7 +372,7 @@ export function buildProps(L) {
   decalPlane(L, clinicSign(), 11.79, 4.1, 0, 4, 1, -PI / 2);
   decalPlane(L, graffiti('ABANDON HOPE', '#7a0a08', 1024, 256), 29.78, 2.6, -5.5, 3.6, 0.9, -PI / 2);
   for (let i = 0; i < 8; i++) decalPlane(L, L.T.blood[i % 4], rand(13, 29), 0.03 + i * 0.001, rand(-8, 8), rand(1, 2.6), rand(1, 2.6), rand(0, TAU), true);
-  L.clinicLights = [fluoro(L, 16.5, 0, 3.75, 1, 1.6), fluoro(L, 25, 0, 3.75, 1, 1.6)];
+  L.clinicLights = [fluoroBank(L, [[16.5, 0, 1.6], [25, 0, 1.6], [21, -5, 1.4], [21, 5, 1.4]], 3.75, 1)];
 
   // ================= MOTOR POOL =================
   jeep(L, -26.5, 6.8, 1.35);

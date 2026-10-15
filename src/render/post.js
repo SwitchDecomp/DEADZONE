@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Pass } from 'three/addons/postprocessing/Pass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 
 class ViewmodelPass extends Pass {
   constructor(scene, camera) {
@@ -92,15 +93,18 @@ export class Post {
     this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.55, 0.55, 0.82);
     this.output = new OutputPass();
     this.fx = new ShaderPass(FXShader);
+    this.fxaa = new ShaderPass(FXAAShader);
     this.composer.addPass(this.renderPass);
     this.composer.addPass(this.vmPass);
     this.composer.addPass(this.bloom);
     this.composer.addPass(this.output);
+    this.composer.addPass(this.fxaa);
     this.composer.addPass(this.fx);
     this.u = this.fx.uniforms;
   }
   setQuality(q) {
-    const samples = q === 'low' ? 0 : q === 'medium' ? 2 : 4;
+    const samples = q === 'high' || q === 'ultra' ? 4 : 0;
+    this.fxaa.enabled = !samples;
     this.composer.renderTarget1.samples = samples;
     this.composer.renderTarget2.samples = samples;
     this.composer.renderTarget1.dispose();
@@ -111,6 +115,7 @@ export class Post {
     this.composer.setPixelRatio(pr);
     this.composer.setSize(w, h);
     this.u.uRes.value.set(w * pr, h * pr);
+    this.fxaa.material.uniforms.resolution.value.set(1 / (w * pr), 1 / (h * pr));
   }
   render(dt) {
     this.u.uTime.value += dt;
