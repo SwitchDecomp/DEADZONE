@@ -1,7 +1,18 @@
 import * as THREE from 'three';
 
-export function createMaterials(T) {
+export function createMaterials(T, P = {}) {
   const M = { tile: {} };
+  // photographic PBR set (diffuse / normal / AO-rough-metal) when available
+  const pbr = (key, set, opts = {}) => {
+    const s = P[set];
+    if (!s) return false;
+    const m = new THREE.MeshStandardMaterial({ map: s.map, normalMap: s.normalMap, aoMap: s.arm, roughnessMap: s.arm, roughness: opts.roughness ?? 1, metalness: s.metal ? (opts.metalness ?? 1) : 0, color: opts.color ?? 0xffffff, aoMapIntensity: 1 });
+    if (s.metal) m.metalnessMap = s.arm;
+    m.normalScale.set(opts.normal ?? 1, opts.normal ?? 1);
+    if (opts.envMapIntensity !== undefined) m.envMapIntensity = opts.envMapIntensity;
+    M[key] = m; M.tile[key] = opts.tile ?? s.tile;
+    return true;
+  };
   const std = (key, tex, tile, opts = {}) => {
     const m = new THREE.MeshStandardMaterial({
       map: tex.map, normalMap: tex.normalMap, roughnessMap: tex.roughnessMap,
@@ -14,21 +25,24 @@ export function createMaterials(T) {
     M[key] = m; M.tile[key] = tile;
     return m;
   };
-  std('concrete', T.concrete, 3.5);
-  std('concreteDark', T.concrete, 3.5, { color: 0x6c6a66 });
-  std('brick', T.brick, 2.4, { normal: 1.4 });
-  std('asphalt', T.asphalt, 7, { normal: 0.8, envMapIntensity: 1.4 });
-  std('tiles', T.tiles, 2.4, { envMapIntensity: 1.2 });
-  std('wood', T.wood, 1.6);
-  std('woodOld', T.woodOld, 1.2);
-  std('rust', T.rustMetal, 2.2, { metalness: 1, metalMap: true });
-  std('rustRed', T.rustMetal, 2.2, { metalness: 1, metalMap: true, color: 0xc07060 });
-  std('rustBlue', T.rustMetal, 2.2, { metalness: 1, metalMap: true, color: 0x7088a8 });
-  std('corrugated', T.corrugated, 1.8, { metalness: 1, metalMap: true });
-  std('plaster', T.plaster, 3);
-  std('plasterBlue', T.plaster, 3, { color: 0x9fb4b8 });
+  pbr('concrete', 'concrete') || std('concrete', T.concrete, 3.5);
+  pbr('concreteDark', 'concrete', { color: 0x8a8682 }) || std('concreteDark', T.concrete, 3.5, { color: 0x6c6a66 });
+  pbr('brick', 'brick', { normal: 1.2 }) || std('brick', T.brick, 2.4, { normal: 1.4 });
+  pbr('asphalt', 'asphalt', { envMapIntensity: 1.6, color: 0xb8b8b8 }) || std('asphalt', T.asphalt, 7, { normal: 0.8, envMapIntensity: 1.4 });
+  pbr('tiles', 'tiles', { envMapIntensity: 1.3 }) || std('tiles', T.tiles, 2.4, { envMapIntensity: 1.2 });
+  pbr('wood', 'wood') || std('wood', T.wood, 1.6);
+  pbr('woodOld', 'woodOld', { tile: 1.2 }) || std('woodOld', T.woodOld, 1.2);
+  pbr('rust', 'rust') || std('rust', T.rustMetal, 2.2, { metalness: 1, metalMap: true });
+  pbr('rustRed', 'painted', { color: 0xd09080 }) || std('rustRed', T.rustMetal, 2.2, { metalness: 1, metalMap: true, color: 0xc07060 });
+  pbr('rustBlue', 'painted', { color: 0x8098b8 }) || std('rustBlue', T.rustMetal, 2.2, { metalness: 1, metalMap: true, color: 0x7088a8 });
+  pbr('corrugated', 'corrugated') || std('corrugated', T.corrugated, 1.8, { metalness: 1, metalMap: true });
+  pbr('plaster', 'plaster') || std('plaster', T.plaster, 3);
+  pbr('plasterBlue', 'plaster', { color: 0xa8c0c4 }) || std('plasterBlue', T.plaster, 3, { color: 0x9fb4b8 });
   std('hazard', T.hazard, 1.2, { metalness: 1, metalMap: true });
-  std('dirt', T.dirt, 4);
+  pbr('dirt', 'dirt') || std('dirt', T.dirt, 4);
+  pbr('floor', 'floor') || std('floor', T.concrete, 3.5);
+  pbr('floorDark', 'floor', { color: 0x8a8884 }) || std('floorDark', T.concrete, 3.5, { color: 0x6c6a66 });
+  pbr('steelPlate', 'metal', { color: 0x9a9a9a }) || std('steelPlate', T.rustMetal, 2.2, { metalness: 1, metalMap: true });
   std('camo', T.camo, 1.5);
   std('canvas', T.camo, 3, { color: 0x8a9070 });
 
@@ -50,8 +64,10 @@ export function createMaterials(T) {
   plain('white', 0xd8d8d0, 0.6);
   plain('policeBlack', 0x0b0c10, 0.3, 0.6);
   plain('policeWhite', 0xd0d0d0, 0.35, 0.6);
-  plain('olive', 0x3c4430, 0.6, 0.3);
-  M.olive.map = T.rustMetal.map; M.olive.normalMap = T.rustMetal.normalMap; M.olive.roughnessMap = T.rustMetal.roughnessMap; M.tile.olive = 2;
+  if (!pbr('olive', 'painted', { color: 0x7a8a5a })) {
+    plain('olive', 0x3c4430, 0.6, 0.3);
+    M.olive.map = T.rustMetal.map; M.olive.normalMap = T.rustMetal.normalMap; M.olive.roughnessMap = T.rustMetal.roughnessMap; M.tile.olive = 2;
+  }
   plain('silhouette', 0x050608, 1);
   plain('wire', 0x3a3a3a, 0.5, 0.8);
 

@@ -329,6 +329,7 @@ export function getSpec(id) { return SPECS[id]; }
 
 export function buildGun(id, T, upgraded = false) {
   const M = gunMaterials(T);
+  if (hasGltfGun(id)) return buildGltfGun(id, upgraded);
   const { spec, groups } = compile(id);
   const root = new THREE.Group();
   const named = {};
@@ -351,3 +352,62 @@ export function buildGun(id, T, upgraded = false) {
 
 // prebuild merged geometry so first equips don't hitch
 export function prewarmGuns() { for (const id of Object.keys(SPECS)) compile(id); }
+
+// ---------- photoscanned guns (Poly Haven, CC0) ----------
+let GLTF_GUNS = null;
+export function setGunAssets(assets) { GLTF_GUNS = (assets && assets.guns) || null; }
+const GLTF_SPECS = {
+  pistol: {
+    asset: 'service_pistol',
+    nodes: { service_pistol_pistol_a: null, service_pistol_slide_a: 'slide', service_pistol_hammer_a: null, service_pistol_trigger_a: null, service_pistol_magazine_loaded: 'mag' },
+    offset: [0, -0.003, 0.017], place: { service_pistol_magazine_loaded: { pos: [-0.014, -0.012, 0], rz: -0.22 } },
+    spec: { muzzle: [0, 0.062, -0.162], eject: [0.016, 0.062, -0.013], sightY: 0.079, rightGrip: [0, -0.035, 0.03], gripR: 0.016, gripRx: -0.28, leftGrip: { type: 'v', pos: [-0.012, -0.045, 0.034], r: 0.026 } },
+  },
+  sniper: {
+    asset: 'bolt_action_rifle_7_62',
+    nodes: { bolt_action_rifle_7_62: null, bolt_action_rifle_7_62_scope: null, bolt_action_rifle_7_62_wrap: null, bolt_action_rifle_7_62_bolt_a: 'bolt', bolt_action_rifle_7_62_trigger: null },
+    offset: [0, -0.045, -0.27], place: {},
+    spec: { muzzle: [0, 0.014, -0.87], eject: [0.02, 0.006, -0.033], sightY: 0.06, rightGrip: [0, -0.05, 0.08], gripR: 0.02, gripRx: -0.35, leftGrip: { type: 'h', pos: [0, -0.01, -0.35], r: 0.028 } },
+  },
+};
+const forgedClones = new Map();
+function forgedClone(mat) {
+  if (forgedClones.has(mat.uuid)) return forgedClones.get(mat.uuid);
+  const m = mat.clone();
+  m.emissive = new THREE.Color(0xa040ff); m.emissiveMap = MATS.forged.emissiveMap; m.emissiveIntensity = 2.2;
+  if (m.color) m.color.multiplyScalar(0.7);
+  forgedClones.set(mat.uuid, m);
+  (MATS.forgedList = MATS.forgedList || []).push(m);
+  return m;
+}
+export function hasGltfGun(id) { return !!(GLTF_SPECS[id] && GLTF_GUNS && GLTF_GUNS[GLTF_SPECS[id].asset]); }
+function buildGltfGun(id, upgraded) {
+  const G = GLTF_SPECS[id];
+  const gltf = GLTF_GUNS[G.asset];
+  gltf.scene.updateMatrixWorld(true);
+  const root = new THREE.Group();
+  const named = {};
+  const holder = (name) => {
+    if (!name) {
+      if (!named.__base) { const g = new THREE.Group(); g.rotation.y = Math.PI / 2; g.position.fromArray(G.offset); root.add(g); named.__base = g; }
+      return named.__base;
+    }
+    if (!named[name]) { const g = new THREE.Group(); g.rotation.y = Math.PI / 2; g.position.fromArray(G.offset); root.add(g); named[name] = g; }
+    return named[name];
+  };
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    let nodeName = null;
+    for (let p = o; p; p = p.parent) if (Object.prototype.hasOwnProperty.call(G.nodes, p.name)) { nodeName = p.name; break; }
+    if (!nodeName) return;
+    const m = new THREE.Mesh(o.geometry, upgraded ? forgedClone(o.material) : o.material);
+    o.matrixWorld.decompose(m.position, m.quaternion, m.scale);
+    const pl = G.place[nodeName];
+    if (pl) { m.position.fromArray(pl.pos); m.rotation.set(0, 0, pl.rz || 0); }
+    holder(G.nodes[nodeName]).add(m);
+  });
+  const base = named.__base; delete named.__base;
+  const muzzle = new THREE.Object3D(); muzzle.position.fromArray(G.spec.muzzle); root.add(muzzle);
+  const eject = new THREE.Object3D(); eject.position.fromArray(G.spec.eject); root.add(eject);
+  return { root, named, muzzle, eject, spec: { ...G.spec, gltf: true }, base };
+}

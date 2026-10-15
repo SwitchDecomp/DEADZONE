@@ -4,7 +4,26 @@ import { graffiti, textPanel } from '../core/textures.js';
 
 const PI = Math.PI;
 
+const CRATE_MODELS = [
+  ['wooden_crate_01', (n) => true, 'a'],
+  ['wooden_crate_02', (n) => true, 'a'],
+  ['old_military_crate', (n) => n.endsWith('_a'), 'a'],
+];
 function crate(L, x, z, s = 1, rot = 0, y = 0, key = 'wood') {
+  if (L.hasModel('wooden_crate_01')) {
+    if (y > 0) {
+      const top = L._crateTop || 0.4;
+      const id = Math.random() < 0.5 ? 'medical_box' : 'ammo_box';
+      L.placeModel(id, x, z, rot + Math.random(), { y: top, collide: false, shadow: false });
+      return;
+    }
+    const [id, pick, v] = CRATE_MODELS[Math.floor(Math.random() * CRATE_MODELS.length)];
+    const sc = 0.95 + s * 0.25;
+    const g = L.placeModel(id, x, z, rot, { pick, variant: v, scale: sc });
+    L._crateTop = g ? g.userData.top : 0.4;
+    if (Math.random() < 0.4 && g) L.placeModel(Math.random() < 0.5 ? 'ammo_box' : 'medical_box', x + (Math.random() - 0.5) * 0.2, z + (Math.random() - 0.5) * 0.2, Math.random() * 6, { y: g.userData.top, collide: false, shadow: false });
+    return;
+  }
   const T = { x, z, y, rot };
   L.pbox(key, T, 0, s / 2, 0, s, s, s);
   const e = 0.06;
@@ -14,6 +33,12 @@ function crate(L, x, z, s = 1, rot = 0, y = 0, key = 'wood') {
 }
 
 function barrel(L, x, z, key = 'rustRed', collide = true, tipped = false) {
+  if (L.hasModel('Barrel_01')) {
+    const id = key === 'rust' ? 'barrel_03' : 'Barrel_01';
+    if (tipped) L.placeModel(id, x, z, Math.random() * 6, { rz: Math.PI / 2, y: 0.3, collide, pad: -0.05 });
+    else L.placeModel(id, x, z, Math.random() * 6, { collide });
+    return;
+  }
   const T = { x, z, rot: Math.random() * TAU };
   if (tipped) {
     L.pcyl(key, T, 0, 0.3, 0, 0.3, 0.9, 'x', 16);
@@ -45,6 +70,10 @@ function sandbags(L, x, z, len, rot = 0, rows = 3) {
 }
 
 function jersey(L, x, z, rot = 0) {
+  if (L.hasModel('concrete_road_barrier')) {
+    L.placeModel('concrete_road_barrier', x, z, rot + (Math.random() - 0.5) * 0.06, { shadow: Math.abs(z) < 12.5 && Math.abs(x) < 12.5 });
+    return;
+  }
   const T = { x, z, rot };
   L.pbox('concrete', T, 0, 0.16, 0, 3, 0.32, 0.62);
   L.pbox('concrete', T, 0, 0.55, 0, 3, 0.5, 0.26);
@@ -167,6 +196,11 @@ function cabinet(L, x, z, rot, w = 1.2, h = 2, key = 'rustBlue') {
 }
 
 function tires(L, x, z, n) {
+  if (L.hasModel('old_tyre')) {
+    for (let i = 0; i < n; i++) L.placeModel('old_tyre', x + (Math.random() - 0.5) * 0.06, z - 0.3 + (Math.random() - 0.5) * 0.06, Math.random() * 6, { rx: Math.PI / 2, y: 0.08 + i * 0.165, collide: false, shadow: i === n - 1 });
+    if (n) L.addCollider(x - 0.3, x + 0.3, 0, n * 0.165, z - 0.3, z + 0.3);
+    return;
+  }
   const T = { x, z, rot: 0 };
   for (let i = 0; i < n; i++) {
     const g = new THREE.TorusGeometry(0.33, 0.14, 8, 18); g.rotateX(PI / 2); g.translate(rand(-0.04, 0.04), 0.14 + i * 0.27, rand(-0.04, 0.04));
@@ -271,9 +305,11 @@ function fluoroBank(L, spots, y, zone) {
 }
 
 function hangingLamp(L, x, z, y, zone, color = 0xffc070, powered = false) {
-  L.pcyl('darkSteel', { x, z, rot: 0 }, 0, y + 0.8, 0, 0.01, 1.6, 'y', 4);
-  const shade = new THREE.ConeGeometry(0.4, 0.35, 16, 1, true); shade.translate(0, y + 0.05, 0);
-  L.part('darkSteel', shade, { x, z, rot: 0 });
+  if (!L.placeModel('hanging_industrial_lamp', x, z, 0, { y: y - 0.16, collide: false, shadow: false })) {
+    L.pcyl('darkSteel', { x, z, rot: 0 }, 0, y + 0.8, 0, 0.01, 1.6, 'y', 4);
+    const shade = new THREE.ConeGeometry(0.4, 0.35, 16, 1, true); shade.translate(0, y + 0.05, 0);
+    L.part('darkSteel', shade, { x, z, rot: 0 });
+  }
   const mat = L.M.lampWarm.clone();
   if (powered) { mat.emissive.set(0xff1a10); mat.emissiveIntensity = 2; }
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), mat);
@@ -402,6 +438,30 @@ export function buildProps(L) {
   decalPlane(L, graffiti('RESTORE POWER', '#e8e0c8', 1024, 256), -12, 4.6, -29.78, 5, 1.25, 0);
   for (let i = 0; i < 5; i++) decalPlane(L, L.T.blood[i % 4], rand(-23, 11), 0.03 + i * 0.001, rand(-29, -13), rand(1, 2), rand(1, 2), rand(0, TAU), true);
   L.genLights = [hangingLamp(L, -17, -16, 6.2, 3, 0xffe0b0, true), hangingLamp(L, 4, -16, 6.2, 3, 0xffe0b0, true)];
+
+  // ================= SCANNED DECOR =================
+  const P = (id, x, z, rot = 0, o = {}) => L.placeModel(id, x, z, rot, o);
+  const can = { pick: (n) => !n.includes('rust'), variant: 'clean' };
+  P('trashbag', -11.2, 3.5, 0.4, { collide: false }); P('trashbag', -11.0, 4.3, 2.1, { collide: false }); P('trashbag', 10.8, 8.0, 1.2, { collide: false });
+  P('metal_trash_can', -11.15, 2.2, 0.3, can);
+  P('metal_jerrycan', -4.9, -0.9, 0.2, { shadow: false }); P('metal_jerrycan', -4.6, -0.5, 1.4, { shadow: false });
+  P('ammo_box', -3.2, -7.95, 0.1, { y: 0.66, collide: false, shadow: false });
+  P('utility_box_01', 6, -11.55, 0);
+  P('wheelchair_01', 19, 6.6, 2.2);
+  P('medical_box', 16, 5, 0.3, { y: 0.92, collide: false, shadow: false });
+  P('medical_box', 25.8, -8.5, 0.1, { y: 1.6, collide: false, shadow: false });
+  P('trashbag', 28.8, 7.9, 0.5, { collide: false });
+  P('cardboard_box_01', 13.2, -8.2, 0.4); P('cardboard_box_01', 13.3, -7.6, 1.9, { y: 0, collide: false });
+  P('tool_cart', -25.5, -8.6, 0.2);
+  P('metal_tool_chest', -14.6, -11.2, 0.05, { y: 0.96, collide: false });
+  P('portable_generator', -30.5, -2.7, Math.PI / 2);
+  P('metal_jerrycan', -30.6, -3.75, 1.6, { shadow: false }); P('metal_jerrycan', -30.2, -4.0, 1.4, { shadow: false });
+  P('utility_box_01', -12.55, 8, -Math.PI / 2);
+  P('portable_generator', 8, -14, 0.5);
+  P('metal_tool_chest', -22.8, -28.6, Math.PI / 2);
+  P('cardboard_box_01', 9.6, -27.4, 0.3, { y: 0, collide: false });
+  P('utility_box_01', 7.5, -29.55, 0); P('utility_box_01', -17, -29.55, 0);
+  P('trashbag', 11.2, -13.1, 0.9, { collide: false });
 
   // ================= OUTSIDE (south) =================
   sedan(L, -4, 20, 1.2); sedan(L, 9, 22, -0.4);

@@ -30,7 +30,16 @@ export class Input {
       if (e.button === 0) this.mouse.left = false;
       if (e.button === 2) this.mouse.right = false;
     });
-    document.addEventListener('wheel', (e) => { if (this.locked) this.mouse.wheel += Math.sign(e.deltaY); }, { passive: true });
+    // accumulate wheel distance so trackpad inertia / tiny deltas don't spam weapon switches
+    this.wheelAcc = 0; this.wheelT = 0;
+    document.addEventListener('wheel', (e) => {
+      if (!this.locked) return;
+      const now = performance.now();
+      if (now - this.wheelT > 250) this.wheelAcc = 0;
+      this.wheelT = now;
+      this.wheelAcc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+      if (Math.abs(this.wheelAcc) >= 80) { this.mouse.wheel += Math.sign(this.wheelAcc); this.wheelAcc = 0; }
+    }, { passive: true });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.el;

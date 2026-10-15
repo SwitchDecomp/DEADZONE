@@ -17,7 +17,9 @@ import { Powerups } from './game/powerups.js';
 import { RoundManager } from './game/rounds.js';
 import { HUD } from './ui/hud.js';
 import { prewarmZombies, buildZombie } from './game/zombieModel.js';
-import { prewarmGuns } from './game/gunModels.js';
+import { loadAssets } from './core/assets.js';
+import { CharLibrary, MixamoRig } from './game/charModel.js';
+import { prewarmGuns, setGunAssets } from './game/gunModels.js';
 
 const $ = (id) => document.getElementById(id);
 const DEFAULTS = { v: 2, sens: 1, adsSens: 0.85, fov: 80, vol: 0.8, music: 0.6, quality: 'medium', invert: false, grain: true, voice: true, bright: 1.3 };
@@ -72,11 +74,18 @@ class Game {
 
     progress(0.01, 'LOADING TYPEFACES');
     try { await Promise.race([document.fonts.ready, new Promise((res) => setTimeout(res, 2000))]); } catch (e) { /* ignore */ }
-    this.textures = await buildTextures((p, t) => progress(p * 0.85, t));
+    this.textures = await buildTextures((p, t) => progress(p * 0.5, t));
+    this.assets = await loadAssets(r, (p, t) => progress(0.5 + p * 0.36, t));
+    if (this.assets.hdr) {
+      const henv = pmrem.fromEquirectangular(this.assets.hdr).texture;
+      this.scene.environment = henv; this.scene.environmentIntensity = 0.7; this.hemiBase = 0.35;
+      this.vmScene.environment = henv; this.vmScene.environmentIntensity = 2.2;
+    }
     progress(0.88, 'CONSTRUCTING SITE 9');
     await new Promise((res) => setTimeout(res, 20));
 
-    this.materials = createMaterials(this.textures);
+    this.materials = createMaterials(this.textures, this.assets.pbr);
+    setGunAssets(this.assets);
     this.sky = createSky();
     this.scene.add(this.sky);
     this.setupLights();
@@ -88,6 +97,7 @@ class Game {
     progress(0.92, 'RAISING THE DEAD');
     await new Promise((res) => setTimeout(res, 20));
     prewarmZombies(this.textures);
+    this.chars = new CharLibrary(this.assets);
     prewarmGuns();
     progress(0.96, 'ARMING');
     await new Promise((res) => setTimeout(res, 20));
@@ -114,7 +124,7 @@ class Game {
     await new Promise((res) => setTimeout(res, 20));
     this.setupMenuScene();
     // warm up shader programs (skinned zombies, every weapon model) to avoid in-game hitches
-    const warm = [buildZombie(this.textures, 'walker'), buildZombie(this.textures, 'brute')];
+    const warm = this.chars.ready ? [new MixamoRig(this.chars, false), new MixamoRig(this.chars, false), new MixamoRig(this.chars, false), new MixamoRig(this.chars, true)] : [buildZombie(this.textures, 'walker'), buildZombie(this.textures, 'brute')];
     warm.forEach((w, i) => { w.root.position.set(i * 2, 0, -3); this.scene.add(w.root); });
     const ids = ['pistol', 'smg', 'shotgun', 'ar', 'burst', 'lmg', 'sniper', 'volt'];
     const vms = [];
@@ -122,7 +132,7 @@ class Game {
     this.vmScene.visible = true;
     try { r.compile(this.scene, this.camera); r.compile(this.vmScene, this.vmCamera); } catch (e) { /* ignore */ }
     this.vmScene.visible = false;
-    warm.forEach((w) => { this.scene.remove(w.root); w.mesh.skeleton.dispose(); });
+    warm.forEach((w) => { this.scene.remove(w.root); if (w.dispose) w.dispose(); else w.mesh.skeleton.dispose(); });
     for (const v of vms) if (v !== this.weapons.gm.root) this.weapons.holder.remove(v);
 
     $('loading').classList.remove('show');
@@ -497,7 +507,7 @@ class Game {
     this.flashK = Math.max(0, this.flashK - dt * 4);
     const fk = this.flashK;
     this.sky.material.uniforms.uFlash.value = fk;
-    this.hemi.intensity = 0.6 + fk * 2.5;
+    this.hemi.intensity = (this.hemiBase ?? 0.6) + fk * 2.5;
     this.moon.intensity = 0.55 + fk * 3;
     this.trauma = Math.max(0, this.trauma - dt * 1.4);
     const tr = this.trauma * this.trauma, t = this.time * 30;

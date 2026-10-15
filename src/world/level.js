@@ -4,6 +4,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { NavGrid } from './nav.js';
 import { rand, TAU, clamp } from '../core/utils.js';
 import { buildProps } from './props.js';
+import { cloneNodes } from '../core/assets.js';
 
 function worldUV(geo, tile) {
   const p = geo.attributes.position, n = geo.attributes.normal, uv = geo.attributes.uv;
@@ -116,6 +117,27 @@ export class Level {
   localToWorld(T, lx, ly, lz) {
     const c = Math.cos(T.rot || 0), s = Math.sin(T.rot || 0);
     return new THREE.Vector3(T.x + lx * c + lz * s, (T.y || 0) + ly, T.z - lx * s + lz * c);
+  }
+
+  // ---------- photoscanned models ----------
+  hasModel(id) { return !!(this.game.assets && this.game.assets.props[id]); }
+  placeModel(id, x, z, rot = 0, { pick, variant = '', scale = 1, y = 0, rx = 0, rz = 0, collide = true, shadow = true, pad = 0, flags } = {}) {
+    const gltf = this.game.assets && this.game.assets.props[id];
+    if (!gltf) return null;
+    this.modelCache = this.modelCache || new Map();
+    const key = id + '|' + variant;
+    let tpl = this.modelCache.get(key);
+    if (!tpl) { tpl = cloneNodes(gltf, pick || (() => true)); this.modelCache.set(key, tpl); }
+    const g = tpl.clone();
+    g.position.set(x, y, z); g.rotation.set(rx, rot, rz); g.scale.setScalar(scale);
+    g.traverse((m) => { if (m.isMesh) { m.castShadow = shadow; m.receiveShadow = true; } });
+    this.scene.add(g);
+    g.updateMatrixWorld(true);
+    g.traverse((o) => { o.matrixAutoUpdate = false; });
+    const box = new THREE.Box3().setFromObject(g);
+    if (collide) this.addCollider(box.min.x - pad, box.max.x + pad, box.min.y, box.max.y, box.min.z - pad, box.max.z + pad, flags);
+    g.userData.top = box.max.y;
+    return g;
   }
 
   addLight({ type = 'point', pos, color = 0xffffff, intensity = 10, distance = 16, decay = 2, flicker = 'none', zone = 0, powered = false, target, angle = 0.6, penumbra = 0.5, shadow = false }) {
@@ -266,8 +288,8 @@ export class Level {
     };
     floor('asphalt', -12.2, -12.2, 12.2, 12.2);
     floor('tiles', 12, -9, 30, 9);
-    floor('concrete', -32, -12, -12, 12);
-    floor('concreteDark', -24, -30, 12, -12);
+    floor('floor', -32, -12, -12, 12);
+    floor('floorDark', -24, -30, 12, -12);
     floor('asphalt', -40, 12.2, 40, 30, 0.008);
 
     this.wall('x', 12, -12.2, 12.2, { h: 4.5, matA: 'brick', matB: 'concreteDark', openings: [{ c: -6, type: 'window', inward: -1 }, { c: 6, type: 'window', inward: -1 }] });

@@ -74,7 +74,7 @@ export class Player {
       g.shake(0.1);
     }
     this.crouching = crouchKey;
-    const staminaMax = this.perks.has('swiftstep') ? 9 : 4.5;
+    const staminaMax = this.perks.has('swiftstep') ? 10 : 6;
     if (wantSprint && !this.sprintLock && len > 0) {
       this.sprinting = true;
       this.stamina -= dt / staminaMax;
@@ -82,7 +82,7 @@ export class Player {
     } else {
       this.sprinting = false;
       this.stamina = Math.min(1, this.stamina + dt / 3);
-      if (this.stamina > 0.35) this.sprintLock = false;
+      if (this.stamina > 0.95 || !(input.down('ShiftLeft') || input.down('ShiftRight'))) this.sprintLock = false;
     }
     let target = 4.4;
     if (this.sprinting) target = 7.0;
@@ -118,8 +118,11 @@ export class Player {
 
     this.eyeTarget = this.downed ? 0.5 : this.sliding > 0 ? 0.95 : this.crouching ? 1.1 : 1.65;
     this.eye = damp(this.eye, this.eyeTarget, 12, dt);
-    this.landVel += (-this.landDip * 120 - this.landVel * 14) * dt;
-    this.landDip += this.landVel * dt * 10;
+    {
+      const steps = Math.max(1, Math.ceil(dt / (1 / 240))), h = dt / steps;
+      for (let i = 0; i < steps; i++) { this.landVel += (-this.landDip * 120 - this.landVel * 14) * h; this.landDip += this.landVel * h * 10; }
+      this.landDip = clamp(this.landDip, -0.2, 0.1);
+    }
     const bobSpeed = this.grounded && this.sliding <= 0 ? this.moveSpeed : 0;
     this.bob += dt * bobSpeed * (this.sprinting ? 1.45 : 1.75);
     this.bobAmt = damp(this.bobAmt, Math.min(1, bobSpeed / 5), 8, dt);

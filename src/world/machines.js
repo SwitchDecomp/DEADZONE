@@ -80,7 +80,8 @@ export class Machines {
     const p = PERKS[sp.id];
     const T = this.game.textures;
     const g = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ map: T.rustMetal.map, normalMap: T.rustMetal.normalMap, color: new THREE.Color(p.hex).multiplyScalar(0.55).add(new THREE.Color(0.15, 0.15, 0.15)), metalness: 0.7, roughness: 0.5 });
+    const PB = this.game.assets && this.game.assets.pbr.painted;
+    const bodyMat = new THREE.MeshStandardMaterial({ map: PB ? PB.map : T.rustMetal.map, normalMap: PB ? PB.normalMap : T.rustMetal.normalMap, roughnessMap: PB ? PB.arm : null, metalnessMap: PB ? PB.arm : null, color: new THREE.Color(p.hex).multiplyScalar(0.55).add(new THREE.Color(0.15, 0.15, 0.15)), metalness: 0.7, roughness: 0.5 });
     const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.1, 0.85), bodyMat); body.position.y = 1.05; g.add(body);
     const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.18, 0.95), this.M.darkSteel); top.position.y = 2.15; g.add(top);
     const base = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.12, 0.95), this.M.darkSteel); base.position.y = 0.06; g.add(base);
@@ -118,7 +119,8 @@ export class Machines {
   buildBox() {
     const T = this.game.textures;
     const g = new THREE.Group();
-    const wood = new THREE.MeshStandardMaterial({ map: T.wood.map, normalMap: T.wood.normalMap, color: 0x8a6a50, roughness: 0.7 });
+    const PW = this.game.assets && this.game.assets.pbr.wood;
+    const wood = new THREE.MeshStandardMaterial({ map: PW ? PW.map : T.wood.map, normalMap: PW ? PW.normalMap : T.wood.normalMap, roughnessMap: PW ? PW.arm : null, color: 0x8a6a50, roughness: 1 });
     const runeTex = textPanel(512, 128, (c, w) => {
       c.fillStyle = '#000'; c.fillRect(0, 0, w, 128);
       c.strokeStyle = '#fff'; c.lineWidth = 4; c.shadowColor = '#fff'; c.shadowBlur = 8;
@@ -219,7 +221,8 @@ export class Machines {
   buildForge(sp) {
     const g = new THREE.Group();
     const T = this.game.textures;
-    const iron = new THREE.MeshStandardMaterial({ map: T.rustMetal.map, normalMap: T.rustMetal.normalMap, color: 0x3a3a40, metalness: 0.9, roughness: 0.55 });
+    const PR = this.game.assets && this.game.assets.pbr.rust;
+    const iron = new THREE.MeshStandardMaterial({ map: PR ? PR.map : T.rustMetal.map, normalMap: PR ? PR.normalMap : T.rustMetal.normalMap, roughnessMap: PR ? PR.arm : null, metalnessMap: PR ? PR.arm : null, color: 0x8a8a90, metalness: 1, roughness: PR ? 1 : 0.55 });
     const base = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.0, 1.4), iron); base.position.y = 0.5; g.add(base);
     const top = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.2, 1.2), iron); top.position.y = 1.6; g.add(top);
     this.forgeGlow = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xff5010, emissiveIntensity: 0.3 });

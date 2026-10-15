@@ -224,7 +224,7 @@ export class WeaponSystem {
       const right = makeArm(this.T, 1, 'v', gm.spec.gripR); right.position.fromArray(gm.spec.rightGrip); right.rotation.x = gm.spec.gripRx ?? -0.3; gm.root.add(right);
       const left = makeArm(this.T, -1, lg.type, lg.r); left.position.fromArray(lg.pos); if (lg.type === 'v') left.rotation.x = gm.spec.gripRx ?? -0.3; gm.root.add(left);
       gm.right = right; gm.left = left; gm.leftHome = left.position.clone();
-      for (const n of Object.values(gm.named)) n.userData.home = n.position.clone();
+      for (const n of Object.values(gm.named)) { n.userData.home = n.position.clone(); n.userData.homeRot = n.rotation.clone(); }
       gm.root.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
       this.models.set(key, gm);
     }
@@ -275,6 +275,9 @@ export class WeaponSystem {
 
   switchTo(i) {
     if (i === this.cur || !this.slots[i] || NO_ACT.includes(this.state)) return;
+    const now = performance.now();
+    if (this.lastSwitch && now - this.lastSwitch < 450) return;
+    this.lastSwitch = now;
     this.state = 'switching'; this.stateT = 0; this.nextSlot = i;
   }
 
@@ -576,20 +579,24 @@ export class WeaponSystem {
   animate(dt, input) {
     const g = this.game, p = g.player, s = this.current, def = s.def, gm = this.gm;
     const t = p.time;
-    const k = 180, d = 16;
-    this.kickVel.addScaledVector(this.kickPos, -k * dt).multiplyScalar(Math.exp(-d * dt));
-    this.kickPos.addScaledVector(this.kickVel, dt);
-    this.kickRotVel.addScaledVector(this.kickRot, -k * dt).multiplyScalar(Math.exp(-d * dt));
-    this.kickRot.addScaledVector(this.kickRotVel, dt);
+    // recoil springs: fixed small sub-steps so they stay stable at any frame rate
+    const k = 180, d = 16, steps = Math.max(1, Math.ceil(dt / (1 / 240))), h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      this.kickVel.addScaledVector(this.kickPos, -k * h).multiplyScalar(Math.exp(-d * h));
+      this.kickPos.addScaledVector(this.kickVel, h);
+      this.kickRotVel.addScaledVector(this.kickRot, -k * h).multiplyScalar(Math.exp(-d * h));
+      this.kickRot.addScaledVector(this.kickRotVel, h);
+    }
     this.kick.position.set(0, this.kickPos.z * 0.15, this.kickPos.z * 0.6);
     this.kick.rotation.set(this.kickRot.x * 0.05, 0, this.kickRot.z * 0.05);
     const ads = this.adsAmount;
     const swayK = lerp(1, 0.15, ads);
-    this.swayVel.x += (-input.mouse.dx * 0.00025 * swayK - this.sway.x * 60) * dt * 10;
-    this.swayVel.y += (input.mouse.dy * 0.00025 * swayK - this.sway.y * 60) * dt * 10;
-    this.swayVel.multiplyScalar(Math.exp(-12 * dt));
-    this.sway.addScaledVector(this.swayVel, dt * 10);
-    this.sway.x = clamp(this.sway.x, -0.06, 0.06); this.sway.y = clamp(this.sway.y, -0.06, 0.06);
+    // weapon sway: frame-rate independent, unconditionally stable smoothing toward mouse velocity
+    const idt = 1 / Math.max(dt, 1 / 240);
+    const tx = clamp(-input.mouse.dx * idt * 0.000012 * swayK, -0.035, 0.035);
+    const ty = clamp(input.mouse.dy * idt * 0.000012 * swayK, -0.03, 0.03);
+    this.swayVel.x = damp(this.swayVel.x, tx, 14, dt); this.swayVel.y = damp(this.swayVel.y, ty, 14, dt);
+    this.sway.x = damp(this.sway.x, this.swayVel.x, 9, dt); this.sway.y = damp(this.sway.y, this.swayVel.y, 9, dt);
     const hip = def.hip;
     const spec = gm.spec;
     const adsPos = [0, -spec.sightY, def.type === 'pistol' ? -0.3 : -0.24];
@@ -612,14 +619,15 @@ export class WeaponSystem {
     else if (this.state === 'grenade') low = Math.sin(clamp(this.stateT / 0.7, 0, 1) * Math.PI) * 0.9;
     else if (this.state === 'melee') low = Math.sin(clamp(this.stateT / 0.55, 0, 1) * Math.PI) * 0.6;
     if (p.downed) low = 1;
-    y -= low * 0.3; rx -= low * 0.6;
+    this.lowK = damp(this.lowK || 0, low, 18, dt);
+    y -= this.lowK * 0.3; rx -= this.lowK * 0.6;
     this.root.position.set(x + this.sway.x, y + this.sway.y, z);
     this.root.rotation.set(rx + this.sway.y * 2, ry + this.sway.x * 2, rz + this.sway.x * 1.5);
     // reset parts
     gm.root.rotation.set(0, 0, 0);
     gm.root.position.set(0, 0, 0);
     gm.left.position.copy(gm.leftHome);
-    for (const n of Object.values(gm.named)) { n.position.copy(n.userData.home); n.rotation.set(0, 0, 0); n.visible = true; }
+    for (const n of Object.values(gm.named)) { n.position.copy(n.userData.home); n.rotation.copy(n.userData.homeRot); n.visible = true; }
     if (this.state === 'reload' && !def.perShell) {
       const dur = (this.reloadEmpty ? def.reloadEmpty : def.reload) * (p.perks.has('quickhands') ? 0.55 : 1);
       const kk = clamp(this.stateT / dur, 0, 1);
@@ -654,7 +662,7 @@ export class WeaponSystem {
       if (def.bolt && gm.named.bolt) {
         const e = kk > 0.2 ? Math.sin(((kk - 0.2) / 0.8) * Math.PI) : 0;
         gm.named.bolt.position.z = gm.named.bolt.userData.home.z + e * 0.08;
-        gm.named.bolt.rotation.z = -e * 1.2;
+        gm.named.bolt.rotation.z = gm.named.bolt.userData.homeRot.z - e * 1.2;
         gm.root.rotation.z = e * 0.25;
       }
     }
@@ -685,7 +693,10 @@ export class WeaponSystem {
     if (this.flashT > 0) { this.flashT -= dt; if (this.flashT <= 0) this.flash.visible = false; }
     this.vmLight.position.set(this.root.position.x, this.root.position.y + 0.05, this.root.position.z - 0.5);
     this.vmLight.intensity = Math.max(0, this.vmLight.intensity - dt * 60);
-    if (s.upgraded) { const M = gunMaterials(this.T); M.forged.emissiveIntensity = 2 + Math.sin(t * 3) * 0.8; M.forgedDark.emissiveIntensity = 1.4 + Math.sin(t * 2.3) * 0.5; }
+    if (s.upgraded) {
+      const M = gunMaterials(this.T); M.forged.emissiveIntensity = 2 + Math.sin(t * 3) * 0.8; M.forgedDark.emissiveIntensity = 1.4 + Math.sin(t * 2.3) * 0.5;
+      if (M.forgedList) for (const fm of M.forgedList) fm.emissiveIntensity = 1.6 + Math.sin(t * 3) * 0.7;
+    }
     const scoped = def.scope && ads > 0.92;
     this.root.visible = !scoped;
     g.hud.scope(scoped);
